@@ -54,6 +54,15 @@ The Models page merges static catalog + custom models + aliases, dedupes by `ali
 - Set `DATABASE_URL=postgresql://USER:PASS@HOST:5432/9router` to use PostgreSQL for **all** application data. If PostgreSQL is unreachable, the server fails fast with an actionable error — it never silently falls back to SQLite.
 - Migrations are automatic and additive on every boot (versioned migrations + schema sync). No manual migration command exists or is needed. Back up SQLite via the file, PostgreSQL via provider backups/`pg_dump`.
 
+## Quick start (this installation)
+
+```bash
+cd myrouter
+./start.sh --public
+```
+
+The script installs dependencies if needed, starts the backend and frontend, and prints a temporary public Cloudflare URL. Dashboard login password: `admin123` (configured via `INITIAL_PASSWORD` in `backend/.env`; change it there and restart to update).
+
 ## Prerequisites
 
 - Node.js 20+ and npm (no other runtime needed for local use)

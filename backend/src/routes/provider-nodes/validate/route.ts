@@ -1,5 +1,7 @@
 
 
+import { normalizeCompatibleBaseUrl, buildCompatibleModelsUrl, buildCompatibleChatUrl, buildCompatibleEmbeddingsUrl } from "@/lib/net/compatibleUrl.js";
+
 // Fetch with timeout wrapper
 const fetchWithTimeout = (url, options, timeout = 10000) => {
   return Promise.race([
@@ -64,8 +66,6 @@ const isAuthFailure = (status) => status === 401 || status === 403;
 
 const isReachableInferenceStatus = (status) => !isAuthFailure(status) && status < 500;
 
-const trimBaseUrl = (baseUrl) => baseUrl.trim().replace(/\/$/, "");
-
 // POST /api/provider-nodes/validate - Validate API key against base URL
 // API key is OPTIONAL: self-hosted gateways (LM Studio, Ollama OpenAI shim,
 // LiteLLM, vLLM…) frequently run unauthenticated. An empty key must validate
@@ -86,16 +86,18 @@ export async function POST_handler(req, res) {
 
     // Custom Embedding Validation - test POST /embeddings directly
     if (type === "custom-embedding") {
-      const normalizedBase = baseUrl.trim().replace(/\/$/, "");
+      const embedUrl = buildCompatibleEmbeddingsUrl(baseUrl);
+      if (!embedUrl) {
+        return res.status(400).json({ error: "Invalid or empty base URL" });
+      }
       if (!modelId?.trim()) {
         return res.json({ valid: false, error: "Model ID required for embedding validation" });
       }
-      const embedRes = await fetchWithTimeout(`${normalizedBase}/embeddings`, {
+      const embedHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (apiKey) embedHeaders["Authorization"] = `Bearer ${apiKey}`;
+      const embedRes = await fetchWithTimeout(embedUrl, {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
+        headers: embedHeaders,
         body: JSON.stringify({ model: modelId.trim(), input: "ping" })
       });
       if (embedRes.ok) {
@@ -116,19 +118,20 @@ export async function POST_handler(req, res) {
 
     // Anthropic Compatible Validation
     if (type === "anthropic-compatible") {
-      let normalizedBase = trimBaseUrl(baseUrl);
-      if (normalizedBase.endsWith("/messages")) {
-        normalizedBase = normalizedBase.slice(0, -9);
+      const normalizedBase = normalizeCompatibleBaseUrl(baseUrl);
+      if (!normalizedBase) {
+        return res.status(400).json({ error: "Invalid or empty base URL" });
       }
 
       const modelsUrl = `${normalizedBase}/models`;
+      const anthHeaders: Record<string, string> = { "anthropic-version": "2023-06-01" };
+      if (apiKey) {
+        anthHeaders["x-api-key"] = apiKey;
+        anthHeaders["Authorization"] = `Bearer ${apiKey}`;
+      }
       const res = await fetchWithTimeout(modelsUrl, {
         method: "GET",
-        headers: {
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          "Authorization": `Bearer ${apiKey}`
-        }
+        headers: anthHeaders,
       });
 
       if (res.ok) return res.json({ valid: true });
@@ -139,14 +142,17 @@ export async function POST_handler(req, res) {
 
       // Fallback: Anthropic-compatible services usually expose /messages, not /models.
       if (modelId) {
+        const msgHeaders: Record<string, string> = {
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        };
+        if (apiKey) {
+          msgHeaders["x-api-key"] = apiKey;
+          msgHeaders["Authorization"] = `Bearer ${apiKey}`;
+        }
         const messagesRes = await fetchWithTimeout(`${normalizedBase}/messages`, {
           method: "POST",
-          headers: {
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
+          headers: msgHeaders,
           body: JSON.stringify({
             model: modelId,
             max_tokens: 1,
@@ -175,8 +181,11 @@ export async function POST_handler(req, res) {
     }
 
     // OpenAI Compatible Validation (Default)
-    const normalizedBase = trimBaseUrl(baseUrl);
-    const modelsUrl = `${normalizedBase}/models`;
+    const normalizedBase = normalizeCompatibleBaseUrl(baseUrl);
+    if (!normalizedBase) {
+      return res.status(400).json({ error: "Invalid or empty base URL" });
+    }
+    const modelsUrl = buildCompatibleModelsUrl(baseUrl);
     const requestHeaders: Record<string, string> = {};
     if (apiKey) requestHeaders["Authorization"] = `Bearer ${apiKey}`;
     const res = await fetchWithTimeout(modelsUrl, { headers: requestHeaders });
@@ -215,12 +224,11 @@ export async function POST_handler(req, res) {
 
     // Fallback: try chat/completions if modelId provided
     if (modelId) {
-      const chatRes = await fetchWithTimeout(`${normalizedBase}/chat/completions`, {
+      const chatHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (apiKey) chatHeaders["Authorization"] = `Bearer ${apiKey}`;
+      const chatRes = await fetchWithTimeout(buildCompatibleChatUrl(baseUrl), {
         method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
+        headers: chatHeaders,
         body: JSON.stringify({
           model: modelId,
           messages: [{ role: "user", content: "ping" }],

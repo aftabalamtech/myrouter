@@ -4,6 +4,7 @@ import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./streamHelpers.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
+import { createOpenAIStreamOrder, isOpenAIChatFormat } from "./openaiStreamOrder.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
 export { COLORS, formatSSE };
@@ -69,6 +70,32 @@ export function createSSEStream(options = {}) {
   let openAIResponsesTerminalSeen = false;
   let openAIResponsesDoneSent = false;
 
+  let doneSent = false;
+
+  const prepareOpenAIFinish = (finishChunk) => {
+    let finalUsage;
+    if (hasValidUsage(finishChunk.usage)) {
+      finalUsage = addBufferToUsage(finishChunk.usage);
+    } else if (hasValidUsage(usage)) {
+      finalUsage = addBufferToUsage(usage);
+    } else {
+      finalUsage = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
+    }
+    usage = finalUsage;
+    return {
+      ...finishChunk,
+      usage: filterUsageForFormat(finalUsage, FORMATS.OPENAI)
+    };
+  };
+
+  const openaiOrder = isOpenAIChatFormat(sourceFormat)
+    ? createOpenAIStreamOrder({
+        prepareFinish: mode === STREAM_MODE.PASSTHROUGH
+          ? prepareOpenAIFinish
+          : (chunk) => chunk
+      })
+    : null;
+
   return new TransformStream({
     async transform(chunk, controller) {
       if (!ttftAt) ttftAt = Date.now();
@@ -96,9 +123,6 @@ export function createSSEStream(options = {}) {
 
         // Passthrough mode: normalize and forward
         if (mode === STREAM_MODE.PASSTHROUGH) {
-          let output;
-          let injectedUsage = false;
-
           // Handle raw JSON error disguised as SSE in passthrough mode
           if (trimmed.startsWith("{")) {
             try {
@@ -116,17 +140,99 @@ export function createSSEStream(options = {}) {
                     finish_reason: "stop"
                   }]
                 };
-                output = formatSSE(errorChunk, FORMATS.OPENAI);
-                reqLogger?.appendConvertedChunk?.(output);
-                controller.enqueue(sharedEncoder.encode(output));
-                
+                const errorOutput = formatSSE(errorChunk, FORMATS.OPENAI);
+                reqLogger?.appendConvertedChunk?.(errorOutput);
+                controller.enqueue(sharedEncoder.encode(errorOutput));
+
                 const doneOutput = "data: [DONE]\n\n";
                 reqLogger?.appendConvertedChunk?.(doneOutput);
                 controller.enqueue(sharedEncoder.encode(doneOutput));
+                doneSent = true;
                 continue;
               }
             } catch (e) {}
           }
+
+          if (openaiOrder) {
+            if (trimmed === "data: [DONE]") {
+              if (!doneSent) {
+                for (const item of openaiOrder.markDone()) {
+                  const output = formatSSE(item, FORMATS.OPENAI);
+                  reqLogger?.appendConvertedChunk?.(output);
+                  controller.enqueue(sharedEncoder.encode(output));
+                  sseEmittedCount++;
+                }
+                const doneOutput = "data: [DONE]\n\n";
+                reqLogger?.appendConvertedChunk?.(doneOutput);
+                controller.enqueue(sharedEncoder.encode(doneOutput));
+                doneSent = true;
+              }
+              continue;
+            }
+
+            if (!trimmed.startsWith("data:")) {
+              if (trimmed.startsWith(":")) {
+                const output = `${line}\n\n`;
+                reqLogger?.appendConvertedChunk?.(output);
+                controller.enqueue(sharedEncoder.encode(output));
+              }
+              continue;
+            }
+
+            let parsed;
+            try {
+              parsed = JSON.parse(trimmed.slice(5).trim());
+            } catch {
+              continue;
+            }
+
+            fixInvalidId(parsed);
+
+            if (parsed.choices !== undefined) {
+              if (!parsed.object) parsed.object = "chat.completion.chunk";
+              if (!parsed.created) parsed.created = Math.floor(Date.now() / 1000);
+            }
+
+            if (parsed.prompt_filter_results !== undefined) {
+              delete parsed.prompt_filter_results;
+            }
+            if (parsed.choices) {
+              for (const choice of parsed.choices) {
+                if (choice.content_filter_results !== undefined) {
+                  delete choice.content_filter_results;
+                }
+              }
+            }
+
+            const delta = parsed.choices?.[0]?.delta;
+            if (delta?.refusal && !delta?.content) {
+              delta.content = `[Refusal]: ${delta.refusal}`;
+            }
+
+            if (delta?.content && typeof delta.content === "string") {
+              totalContentLength += delta.content.length;
+              accumulatedContent += delta.content;
+            }
+            if (delta?.reasoning_content && typeof delta.reasoning_content === "string") {
+              totalContentLength += delta.reasoning_content.length;
+              accumulatedThinking += delta.reasoning_content;
+            }
+
+            const extracted = extractUsage(parsed);
+            if (extracted) usage = extracted;
+
+            for (const item of openaiOrder.push(parsed)) {
+              if (!hasValuableContent(item, FORMATS.OPENAI)) continue;
+              const output = formatSSE(item, FORMATS.OPENAI);
+              reqLogger?.appendConvertedChunk?.(output);
+              controller.enqueue(sharedEncoder.encode(output));
+              sseEmittedCount++;
+            }
+            continue;
+          }
+
+          let output;
+          let injectedUsage = false;
 
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
@@ -274,9 +380,21 @@ export function createSSEStream(options = {}) {
             sseEmittedCount++;
           }
 
-          const output = "data: [DONE]\n\n";
-          reqLogger?.appendConvertedChunk?.(output);
-          controller.enqueue(sharedEncoder.encode(output));
+          if (openaiOrder) {
+            for (const item of openaiOrder.markDone()) {
+              const output = formatSSE(item, sourceFormat);
+              reqLogger?.appendConvertedChunk?.(output);
+              controller.enqueue(sharedEncoder.encode(output));
+              sseEmittedCount++;
+            }
+          }
+
+          if (!doneSent) {
+            const output = "data: [DONE]\n\n";
+            reqLogger?.appendConvertedChunk?.(output);
+            controller.enqueue(sharedEncoder.encode(output));
+            doneSent = true;
+          }
           if (keepsOpenAIResponsesFormat) openAIResponsesDoneSent = true;
           continue;
         }
@@ -346,12 +464,9 @@ export function createSSEStream(options = {}) {
         }
 
         if (translated?.length > 0) {
+          const immediate = [];
           for (const item of translated) {
             if (item === null || item === undefined) continue;
-            // Filter empty chunks
-            if (!hasValuableContent(item, sourceFormat)) {
-              continue; // Skip this empty chunk
-            }
 
             // Inject estimated usage if finish chunk has no valid usage
             const isFinishChunk = item.type === "message_delta" || item.choices?.[0]?.finish_reason;
@@ -364,6 +479,17 @@ export function createSSEStream(options = {}) {
               const buffered = addBufferToUsage(state.usage);
               item.usage = filterUsageForFormat(buffered, sourceFormat);
             }
+
+            if (openaiOrder) {
+              immediate.push(...openaiOrder.push(item));
+            } else {
+              immediate.push(item);
+            }
+          }
+
+          for (const item of immediate) {
+            // Filter empty chunks
+            if (!hasValuableContent(item, sourceFormat)) continue;
 
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
@@ -379,10 +505,64 @@ export function createSSEStream(options = {}) {
       dbg("SSE", `flush | provider=${provider} | model=${model} | recvLines=${sseLineCount} | emitted=${sseEmittedCount} | events=[${evtSummary}]`);
       trackPendingRequest(model, provider, connectionId, false);
       try {
+        const writeTranslated = (items) => {
+          if (!items || items.length === 0) return;
+          const immediate = [];
+          for (const item of items) {
+            if (item === null || item === undefined) continue;
+            if (openaiOrder) immediate.push(...openaiOrder.push(item));
+            else immediate.push(item);
+          }
+          for (const item of immediate) {
+            if (openaiOrder && !hasValuableContent(item, sourceFormat)) continue;
+            const output = formatSSE(item, sourceFormat);
+            reqLogger?.appendConvertedChunk?.(output);
+            controller.enqueue(sharedEncoder.encode(output));
+            sseEmittedCount++;
+          }
+        };
+
         const remaining = decoder.decode();
         if (remaining) buffer += remaining;
 
         if (mode === STREAM_MODE.PASSTHROUGH) {
+          if (openaiOrder) {
+            if (buffer.trim() === "data: [DONE]" && !doneSent) {
+              for (const item of openaiOrder.markDone()) {
+                const output = formatSSE(item, FORMATS.OPENAI);
+                reqLogger?.appendConvertedChunk?.(output);
+                controller.enqueue(sharedEncoder.encode(output));
+              }
+              const doneOutput = "data: [DONE]\n\n";
+              reqLogger?.appendConvertedChunk?.(doneOutput);
+              controller.enqueue(sharedEncoder.encode(doneOutput));
+              doneSent = true;
+            }
+            buffer = "";
+
+            if (!doneSent) {
+              for (const item of openaiOrder.flush()) {
+                const output = formatSSE(item, FORMATS.OPENAI);
+                reqLogger?.appendConvertedChunk?.(output);
+                controller.enqueue(sharedEncoder.encode(output));
+                sseEmittedCount++;
+              }
+
+              const doneOutput = "data: [DONE]\n\n";
+              reqLogger?.appendConvertedChunk?.(doneOutput);
+              controller.enqueue(sharedEncoder.encode(doneOutput));
+              doneSent = true;
+            }
+
+            if (onStreamComplete) {
+              onStreamComplete({
+                content: accumulatedContent,
+                thinking: accumulatedThinking
+              }, usage, ttftAt);
+            }
+            return;
+          }
+
           if (buffer) {
             let output = buffer;
             if (buffer.startsWith("data:") && !buffer.startsWith("data: ")) {
@@ -401,9 +581,12 @@ export function createSSEStream(options = {}) {
           // Some clients (e.g. OpenClaw) expect the OpenAI-style sentinel:
           //   data: [DONE]\n\n
           // Without it they can hang until timeout and trigger failover.
-          const doneOutput = "data: [DONE]\n\n";
-          reqLogger?.appendConvertedChunk?.(doneOutput);
-          controller.enqueue(sharedEncoder.encode(doneOutput));
+          if (!doneSent) {
+            const doneOutput = "data: [DONE]\n\n";
+            reqLogger?.appendConvertedChunk?.(doneOutput);
+            controller.enqueue(sharedEncoder.encode(doneOutput));
+            doneSent = true;
+          }
 
           if (onStreamComplete) {
             onStreamComplete({
@@ -426,14 +609,7 @@ export function createSSEStream(options = {}) {
               }
             }
 
-            if (translated?.length > 0) {
-              for (const item of translated) {
-                if (item === null || item === undefined) continue;
-                const output = formatSSE(item, sourceFormat);
-                reqLogger?.appendConvertedChunk?.(output);
-                controller.enqueue(sharedEncoder.encode(output));
-              }
-            }
+            writeTranslated(translated);
           }
         }
 
@@ -446,12 +622,14 @@ export function createSSEStream(options = {}) {
           }
         }
 
-        if (flushed?.length > 0) {
-          for (const item of flushed) {
-            if (item === null || item === undefined) continue;
+        writeTranslated(flushed);
+
+        if (openaiOrder) {
+          for (const item of openaiOrder.flush()) {
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));
+            sseEmittedCount++;
           }
         }
 
@@ -465,9 +643,12 @@ export function createSSEStream(options = {}) {
         }
 
         if (!keepsOpenAIResponsesFormat || !openAIResponsesDoneSent) {
-          const doneOutput = "data: [DONE]\n\n";
-          reqLogger?.appendConvertedChunk?.(doneOutput);
-          controller.enqueue(sharedEncoder.encode(doneOutput));
+          if (!doneSent) {
+            const doneOutput = "data: [DONE]\n\n";
+            reqLogger?.appendConvertedChunk?.(doneOutput);
+            controller.enqueue(sharedEncoder.encode(doneOutput));
+            doneSent = true;
+          }
         }
 
         if (!hasValidUsage(state?.usage) && totalContentLength > 0) {
@@ -503,10 +684,11 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
   });
 }
 
-export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null) {
+export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, sourceFormat = null) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
     provider,
+    sourceFormat,
     reqLogger,
     model,
     connectionId,

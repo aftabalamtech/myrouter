@@ -70,8 +70,9 @@ export async function clearSyncedModels(storageAlias) {
 
 // Persist discovered models: add new, update changed metadata, mark stale ones
 // that disappeared upstream. Manual stores (aliases/custom) are never touched.
-export async function persistDiscovered({ storageAlias, discovered, manualIds }) {
+export async function persistDiscovered({ storageAlias, discovered, manualIds, failedConnectionIds }) {
   const manual = new Set(manualIds || []);
+  const failed = new Set(failedConnectionIds || []);
   const existing = await getSyncedModels(storageAlias);
   const seen = new Set();
   const now = new Date().toISOString();
@@ -119,7 +120,9 @@ export async function persistDiscovered({ storageAlias, discovered, manualIds })
   let stale = 0;
   for (const [key, record] of Object.entries(existing)) {
     if (seen.has(key) || record?.stale) continue;
-    // Never delete manual models; only mark managed rows stale.
+    if (record?.manual) continue;
+    const recordConns = record?.connectionIds || (record?.connectionId ? [record.connectionId] : []);
+    if (failed.size > 0 && recordConns.some((cid) => failed.has(cid))) continue;
     await syncedKv.set(key, { ...record, stale: true });
     stale += 1;
   }
@@ -268,6 +271,10 @@ async function runSyncJob(job) {
     const merged = mergeConnectionModels(perConnection);
     job.summary.discovered = merged.length;
 
+    const failedConnectionIds = job.connectionStates
+      .filter((s) => s.status === "failed")
+      .map((s) => s.connectionId);
+
     // Every connection failed / returned an empty catalog. Do NOT touch the
     // stored catalog: an unreachable or empty upstream (rate limit, auth
     // expiry, gateway outage, provider that simply has no /models endpoint)
@@ -293,6 +300,7 @@ async function runSyncJob(job) {
       storageAlias: job.storageAlias,
       discovered: merged,
       manualIds: job.manualIds,
+      failedConnectionIds,
     });
     job.summary.added = persist.added;
     job.summary.updated = persist.updated;

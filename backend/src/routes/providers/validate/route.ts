@@ -1,4 +1,5 @@
 
+import { normalizeCompatibleBaseUrl, buildCompatibleModelsUrl, buildCompatibleChatUrl, buildCompatibleEmbeddingsUrl } from "@/lib/net/compatibleUrl.js";
 import { getProviderNodeById } from "../../../models/index.js";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider, AI_PROVIDERS } from "../../../shared/constants/providers.js";
 import { getDefaultModel } from "../../../../open-sse/config/providerModels.js";
@@ -6,7 +7,6 @@ import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from
 import { openaiToCommandCode } from "../../../../open-sse/translator/request/openai-to-commandcode.js";
 import { PROVIDER_ENDPOINTS } from "../../../shared/constants/config.js";
 import { normalizeProviderId } from "../../../lib/providerNormalization.js";
-import { fetchWithTimeout } from "../../../lib/net/fetchWithTimeout.js";
 
 const fetchWithTimeout = (url, options = {}, timeout = 10000) => {
   const signal = options.signal || AbortSignal.timeout(timeout);
@@ -122,7 +122,7 @@ export async function POST_handler(req, res) {
     const { apiKey, providerSpecificData } = body;
 
     const isNoAuth = AI_PROVIDERS[provider]?.noAuth === true;
-    if (!provider || (!apiKey && provider !== "ollama-local" && !isNoAuth)) {
+    if (!provider || (!apiKey && provider !== "ollama-local" && !isNoAuth && !isOpenAICompatibleProvider(provider) && !isCustomEmbeddingProvider(provider) && !isAnthropicCompatibleProvider(provider))) {
       return res.status(400).json({ error: "Provider and API key required" });
     }
 
@@ -136,10 +136,14 @@ export async function POST_handler(req, res) {
         if (!node) {
           return res.status(404).json({ error: "OpenAI Compatible node not found" });
         }
-        const baseUrl = node.baseUrl?.replace(/\/$/, "");
-        const modelsUrl = `${baseUrl}/models`;
+        const modelsUrl = buildCompatibleModelsUrl(node.baseUrl, provider);
+        if (!modelsUrl) {
+          return res.status(400).json({ error: "Invalid base URL" });
+        }
+        const compatHeaders: Record<string, string> = {};
+        if (apiKey) compatHeaders["Authorization"] = `Bearer ${apiKey}`;
         const modelsRes = await fetchWithTimeout(modelsUrl, {
-          headers: { "Authorization": `Bearer ${apiKey}` },
+          headers: compatHeaders,
         });
         if (modelsRes.ok) {
           return res.json({ valid: true, error: null });
@@ -149,12 +153,12 @@ export async function POST_handler(req, res) {
         }
 
         const model = body.defaultModel || body.modelId || providerSpecificData?.defaultModel || "test";
-        const chatRes = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
+        const chatUrl = buildCompatibleChatUrl(node.baseUrl, provider);
+        const chatHeaders: Record<string, string> = { "Content-Type": "application/json" };
+        if (apiKey) chatHeaders["Authorization"] = `Bearer ${apiKey}`;
+        const chatRes = await fetchWithTimeout(chatUrl, {
           method: "POST",
-          headers: {
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
+          headers: chatHeaders,
           body: JSON.stringify({
             model,
             max_tokens: 1,
@@ -175,9 +179,11 @@ export async function POST_handler(req, res) {
         if (!node) {
           return res.status(404).json({ error: "Custom Embedding node not found" });
         }
-        const baseUrl = node.baseUrl?.replace(/\/$/, "");
-        const modelsRes = await fetchWithTimeout(`${baseUrl}/models`, {
-          headers: { "Authorization": `Bearer ${apiKey}` },
+        const modelsUrl = buildCompatibleModelsUrl(node.baseUrl, provider);
+        const embedHeaders: Record<string, string> = {};
+        if (apiKey) embedHeaders["Authorization"] = `Bearer ${apiKey}`;
+        const modelsRes = await fetchWithTimeout(modelsUrl || `${normalizeCompatibleBaseUrl(node.baseUrl)}/models`, {
+          headers: embedHeaders,
         });
         if (modelsRes.ok) {
           return res.json({ valid: true });
@@ -187,9 +193,12 @@ export async function POST_handler(req, res) {
           return res.json({ valid: false, error: "Invalid API key" });
         }
         // Fallback: probe /embeddings with a common test model — many providers lack /models
-        const embedRes = await fetchWithTimeout(`${baseUrl}/embeddings`, {
+        const embedUrl = buildCompatibleEmbeddingsUrl(node.baseUrl);
+        const embedProbeHeaders: Record<string, string> = { "Content-Type": "application/json" };
+        if (apiKey) embedProbeHeaders["Authorization"] = `Bearer ${apiKey}`;
+        const embedRes = await fetchWithTimeout(embedUrl || `${normalizeCompatibleBaseUrl(node.baseUrl)}/embeddings`, {
           method: "POST",
-          headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          headers: embedProbeHeaders,
           body: JSON.stringify({ model: "test", input: "ping" }),
         });
         // 401/403 = bad key; anything else (including 400 "model not found") means key works
@@ -206,16 +215,18 @@ export async function POST_handler(req, res) {
           return res.status(404).json({ error: "Anthropic Compatible node not found" });
         }
 
-        const normalizedBase = normalizeAnthropicBaseUrl(node.baseUrl);
+        const normalizedBase = normalizeCompatibleBaseUrl(node.baseUrl);
 
         const modelsUrl = `${normalizedBase}/models`;
 
+        const anthHeaders: Record<string, string> = { "anthropic-version": "2023-06-01" };
+        if (apiKey) {
+          anthHeaders["x-api-key"] = apiKey;
+          anthHeaders["Authorization"] = `Bearer ${apiKey}`;
+        }
+
         const modelsRes = await fetchWithTimeout(modelsUrl, {
-          headers: {
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "Authorization": `Bearer ${apiKey}`
-          },
+          headers: anthHeaders,
         });
 
         if (modelsRes.ok) {
@@ -226,14 +237,17 @@ export async function POST_handler(req, res) {
         }
 
         const model = body.defaultModel || body.modelId || providerSpecificData?.defaultModel || "test";
+        const msgHeaders: Record<string, string> = {
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        };
+        if (apiKey) {
+          msgHeaders["x-api-key"] = apiKey;
+          msgHeaders["Authorization"] = `Bearer ${apiKey}`;
+        }
         const messagesRes = await fetchWithTimeout(`${normalizedBase}/messages`, {
           method: "POST",
-          headers: {
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            "Authorization": `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
+          headers: msgHeaders,
           body: JSON.stringify({
             model,
             max_tokens: 1,

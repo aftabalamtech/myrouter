@@ -49,15 +49,18 @@ export function parseSSELine(line, format = null) {
 // Check if chunk has valuable content (not empty)
 export function hasValuableContent(chunk, format) {
   // OpenAI format
-  if (format === FORMATS.OPENAI && chunk.choices?.[0]?.delta) {
-    const delta = chunk.choices[0].delta;
-    return !!(delta.content && delta.content !== "" ||
-           delta.reasoning_content && delta.reasoning_content !== "" ||
-           delta.tool_calls && delta.tool_calls.length > 0 ||
-           delta.refusal && delta.refusal !== "" ||
-           chunk.choices[0].finish_reason ||
-           delta.role ||
-           chunk.usage);
+  if (format === FORMATS.OPENAI) {
+    if (chunk.usage) return true;
+    if (chunk.choices?.[0]?.delta) {
+      const delta = chunk.choices[0].delta;
+      return !!(delta.content && delta.content !== "" ||
+             delta.reasoning_content && delta.reasoning_content !== "" ||
+             delta.tool_calls && delta.tool_calls.length > 0 ||
+             delta.refusal && delta.refusal !== "" ||
+             chunk.choices[0].finish_reason ||
+             delta.role);
+    }
+    return false;
   }
 
   // Claude format

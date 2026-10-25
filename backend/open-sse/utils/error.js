@@ -1,5 +1,14 @@
 import { ERROR_TYPES, DEFAULT_ERROR_MESSAGES } from "../config/errorConfig.js";
 
+function sanitizeErrorText(text) {
+  if (!text || typeof text !== "string") return "";
+  const lower = text.slice(0, 500).toLowerCase();
+  if (lower.includes("<!doctype") || lower.includes("<html") || lower.includes("<head") || /<[a-z][a-z0-9]*[\s>]/i.test(lower)) {
+    return "Upstream returned an HTML error page";
+  }
+  return String(text).slice(0, 300);
+}
+
 /**
  * Build OpenAI-compatible error response body
  * @param {number} statusCode - HTTP status code
@@ -79,7 +88,7 @@ export async function parseUpstreamError(response, executor = null) {
     const json = JSON.parse(bodyText);
     message = json.error?.message || json.message || json.error || bodyText;
   } catch {
-    message = bodyText;
+    message = sanitizeErrorText(bodyText);
   }
 
   const messageStr = typeof message === "string" ? message : JSON.stringify(message);

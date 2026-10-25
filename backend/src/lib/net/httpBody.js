@@ -54,9 +54,17 @@ export function parseErrorPayload(text, { status } = {}) {
     } catch {
       // Not JSON — fall through to the raw snippet.
     }
+    if (looksLikeHtml(raw)) {
+      return status ? `Upstream returned an HTML error page (HTTP ${status})` : "Upstream returned an HTML error page";
+    }
     return raw.slice(0, 300);
   }
   return status ? `HTTP ${status}` : "Upstream request failed";
+}
+
+function looksLikeHtml(text) {
+  const lower = text.slice(0, 500).toLowerCase();
+  return lower.includes("<!doctype") || lower.includes("<html") || lower.includes("<head") || /<[a-z][a-z0-9]*[\s>]/i.test(lower);
 }
 
 /**
