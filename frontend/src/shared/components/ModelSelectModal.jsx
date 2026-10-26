@@ -30,6 +30,7 @@ export default function ModelSelectModal({
   kindFilter = null,
   addedModelValues = [],
   closeOnSelect = true,
+  showWorkingFilter = false,
 }) {
   // Filter activeProviders by serviceKinds when kindFilter set (e.g. "webSearch", "webFetch")
   const filteredActiveProviders = useMemo(() => {
@@ -46,6 +47,8 @@ export default function ModelSelectModal({
   const [customModels, setCustomModels] = useState([]);
   const [disabledModels, setDisabledModels] = useState({});
   const [blockedModels, setBlockedModels] = useState({});
+  const [testResults, setTestResults] = useState({});
+  const [workingOnly, setWorkingOnly] = useState(false);
 
   const fetchCombos = async () => {
     try {
@@ -126,6 +129,18 @@ export default function ModelSelectModal({
   useEffect(() => {
     if (isOpen) fetchBlockedModels();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !showWorkingFilter) return;
+    let active = true;
+    const load = () => fetch("/api/models/test-results", { cache: "no-store" })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => { if (active) setTestResults(data?.results || {}); })
+      .catch(() => { if (active) setTestResults({}); });
+    load();
+    const interval = setInterval(load, 5000);
+    return () => { active = false; clearInterval(interval); };
+  }, [isOpen, showWorkingFilter]);
 
   const allProviders = useMemo(() => ({ ...OAUTH_PROVIDERS, ...FREE_PROVIDERS, ...FREE_TIER_PROVIDERS, ...APIKEY_PROVIDERS }), []);
 
@@ -366,6 +381,14 @@ export default function ModelSelectModal({
     const filtered = {};
     Object.entries(groupedModels).forEach(([providerId, group]) => {
       let models = group.models;
+      if (workingOnly) {
+        models = models.filter((model) => {
+          const result = testResults[model.value]
+            || testResults[`${providerId}/${model.id}`]
+            || testResults[`${group.alias}/${model.id}`];
+          return result?.status === "passed";
+        });
+      }
       if (query) {
         const providerNameMatches = group.name.toLowerCase().includes(query);
         models = models.filter(
@@ -382,7 +405,7 @@ export default function ModelSelectModal({
     });
 
     return filtered;
-  }, [groupedModels, searchQuery, addedModelValues]);
+  }, [groupedModels, searchQuery, addedModelValues, workingOnly, testResults]);
 
   const handleSelect = (model) => {
     const value = model?.value || model?.name || model;
@@ -418,9 +441,16 @@ export default function ModelSelectModal({
         <span>Click to add, click again to remove. Changes are saved automatically.</span>
       </div>
 
-      {/* Search - compact */}
-      <div className="mb-3">
-        <div className="relative">
+       {/* Search - compact */}
+       <div className="mb-3">
+         <div className="flex items-center gap-3 mb-2">
+           {showWorkingFilter && <label className="flex items-center gap-1.5 text-xs text-text-muted cursor-pointer">
+             <input type="checkbox" checked={workingOnly} onChange={(e) => setWorkingOnly(e.target.checked)} className="accent-primary" />
+             Working models only
+           </label>}
+           {workingOnly && <span className="text-[10px] text-text-muted">Only latest successful tests are shown.</span>}
+         </div>
+         <div className="relative">
           <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted text-[16px]">
             search
           </span>
@@ -472,8 +502,13 @@ export default function ModelSelectModal({
           </div>
         )}
 
-        {/* Provider models */}
-        {Object.entries(filteredGroups).map(([providerId, group]) => (
+         {/* Provider models */}
+         {Object.keys(filteredGroups).length === 0 && filteredCombos.length === 0 && (
+           <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-text-muted">
+             {workingOnly ? "No verified working models match this filter. Test a model successfully or disable Working models only." : "No models match this filter."}
+           </div>
+         )}
+         {Object.entries(filteredGroups).map(([providerId, group]) => (
           <div key={providerId}>
             {/* Provider header */}
             <div className="flex items-center gap-1.5 mb-1.5 sticky top-0 bg-surface py-0.5">

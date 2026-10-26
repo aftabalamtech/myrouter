@@ -56,6 +56,8 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
     : "";
   const [name, setName] = useState(initialName);
   const [models, setModels] = useState(combo?.models || []);
+  const [metadata, setMetadata] = useState(combo?.metadata || { autoSelectWorking: false, excludedModels: [] });
+  const [autoSummary, setAutoSummary] = useState("");
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
@@ -63,8 +65,12 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
 
   useEffect(() => {
     if (!isOpen) return;
+    setName(combo?.name ? (forcePrefix && combo.name.startsWith(forcePrefix) ? combo.name.slice(forcePrefix.length) : combo.name) : "");
+    setModels(combo?.models || []);
+    setMetadata(combo?.metadata || { autoSelectWorking: false, excludedModels: [] });
+    setAutoSummary("");
     fetch("/api/models/alias").then((r) => r.ok ? r.json() : null).then((d) => d && setModelAliases(d.aliases || {})).catch(() => {});
-  }, [isOpen]);
+  }, [isOpen, combo, forcePrefix]);
 
   const validateName = (value) => {
     if (!value.trim()) { setNameError("Name is required"); return false; }
@@ -84,11 +90,17 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
 
   const handleAddModel = (model) => {
     if (!models.includes(model.value)) setModels([...models, model.value]);
+    setMetadata((current) => ({ ...current, excludedModels: (current.excludedModels || []).filter((value) => value !== model.value) }));
   };
   const handleDeselectModel = (model) => {
     setModels(models.filter((m) => m !== model.value));
+    setMetadata((current) => ({ ...current, excludedModels: [...new Set([...(current.excludedModels || []), model.value])] }));
   };
-  const handleRemoveModel = (i) => setModels(models.filter((_, idx) => idx !== i));
+  const handleRemoveModel = (i) => {
+    const model = models[i];
+    setModels(models.filter((_, idx) => idx !== i));
+    setMetadata((current) => ({ ...current, excludedModels: [...new Set([...(current.excludedModels || []), model])] }));
+  };
   const handleMoveUp = (i) => {
     if (i === 0) return;
     const a = [...models]; [a[i - 1], a[i]] = [a[i], a[i - 1]]; setModels(a);
@@ -98,10 +110,31 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
     const a = [...models]; [a[i], a[i + 1]] = [a[i + 1], a[i]]; setModels(a);
   };
 
+  const handleAutoSelect = async () => {
+    if (!combo?.id) {
+      setShowModelSelect(true);
+      setAutoSummary("Save this Combo first, then auto-select verified working models.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/combos/${encodeURIComponent(combo.id)}/auto-select`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Auto-selection failed");
+      setModels(data.combo?.models || models);
+      const summary = data.summary || {};
+      setAutoSummary(`Added ${summary.added || 0}; already selected ${summary.alreadyExisting || 0}; excluded ${summary.excluded || 0}.`);
+    } catch (error) {
+      setAutoSummary(error.message || "Auto-selection failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!validateName(name)) return;
     setSaving(true);
-    await onSave({ name: forcePrefix + name.trim(), models });
+    await onSave({ name: forcePrefix + name.trim(), models, metadata });
     setSaving(false);
   };
 
@@ -154,6 +187,18 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
               <span className="material-symbols-outlined text-[16px]">add</span>
               Add Model
             </button>
+            <button onClick={handleAutoSelect} disabled={saving}
+              className="w-full mt-2 py-2 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-50 transition-colors flex items-center justify-center gap-1">
+              <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+              Auto Select Working Models
+            </button>
+            {autoSummary && <p className="mt-1 text-[11px] text-text-muted">{autoSummary}</p>}
+            <label className="mt-3 flex items-start gap-2 text-xs text-text-muted cursor-pointer">
+              <input type="checkbox" checked={metadata.autoSelectWorking === true}
+                onChange={(e) => setMetadata((current) => ({ ...current, autoSelectWorking: e.target.checked }))}
+                className="mt-0.5 accent-primary" />
+              <span><b className="text-text-main">Auto-select newly verified working models</b><br />Adds future successful tests to this Combo, except models you remove manually.</span>
+            </label>
           </div>
 
           <div className="flex flex-col gap-2 pt-1 sm:flex-row">
@@ -168,8 +213,8 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
       <ModelSelectModal isOpen={showModelSelect} onClose={() => setShowModelSelect(false)}
         onSelect={handleAddModel} onDeselect={handleDeselectModel}
         activeProviders={activeProviders} modelAliases={modelAliases}
-        title="Add Model to Combo" kindFilter={kindFilter}
-        addedModelValues={models} closeOnSelect={false} />
+         title="Add Model to Combo" kindFilter={kindFilter}
+         addedModelValues={models} closeOnSelect={false} showWorkingFilter={!kindFilter} />
     </>
   );
 }

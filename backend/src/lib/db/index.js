@@ -91,7 +91,7 @@ export async function exportDb() {
     providerNodes: providerNodes.map((r) => ({ ...parseJson(r.data, {}), id: r.id, type: r.type, name: r.name, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     proxyPools: proxyPools.map((r) => ({ ...parseJson(r.data, {}), id: r.id, isActive: r.isActive === 1 || r.isActive === true, testStatus: r.testStatus, createdAt: r.createdAt, updatedAt: r.updatedAt })),
     apiKeys: apiKeys.map((r) => ({ id: r.id, key: r.key, name: r.name, machineId: r.machineId, isActive: r.isActive === 1 || r.isActive === true, createdAt: r.createdAt })),
-    combos: combos.map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), createdAt: r.createdAt, updatedAt: r.updatedAt })),
+    combos: combos.map((r) => ({ id: r.id, name: r.name, kind: r.kind, models: parseJson(r.models, []), metadata: parseJson(r.metadata, { autoSelectWorking: false, excludedModels: [] }), createdAt: r.createdAt, updatedAt: r.updatedAt })),
     modelAliases: {},
     customModels: [],
     mitmAlias: {},
@@ -156,8 +156,8 @@ export async function importDb(payload) {
     }
     for (const c of payload.combos || []) {
       await db.run(
-        `INSERT INTO combos(id, name, kind, models, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?)`,
-        [c.id, c.name, c.kind || null, stringifyJson(c.models || []), c.createdAt || new Date().toISOString(), c.updatedAt || new Date().toISOString()]
+        `INSERT INTO combos(id, name, kind, models, metadata, createdAt, updatedAt) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+        [c.id, c.name, c.kind || null, stringifyJson(c.models || []), stringifyJson(c.metadata || { autoSelectWorking: false, excludedModels: [] }), c.createdAt || new Date().toISOString(), c.updatedAt || new Date().toISOString()]
       );
     }
     for (const [a, m] of Object.entries(payload.modelAliases || {})) {

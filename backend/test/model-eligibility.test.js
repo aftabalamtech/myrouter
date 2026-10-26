@@ -81,6 +81,7 @@ describe("testBatch helpers", () => {
     assert.equal(classifyTestError({ status: 429, error: "slow down" }), "rate_limited");
     assert.equal(classifyTestError({ status: 404, error: "no such model" }), "not_found");
     assert.equal(classifyTestError({ status: null, error: "timed out" }), "timeout");
-    assert.equal(classifyTestError({ status: 500, error: "boom" }), "provider");
+    assert.equal(classifyTestError({ status: 500, error: "boom" }), "network");
+    assert.equal(classifyTestError({ status: null, error: "No active credentials for provider" }), "no_connection");
   });
 });

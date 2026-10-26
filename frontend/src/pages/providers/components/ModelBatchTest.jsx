@@ -55,7 +55,8 @@ export default function ModelBatchTest({ models, disabled, testResults, onResult
     if (!snapshot) return;
     for (const r of snapshot.results || []) {
       if (r.status === "passed") onResultRef.current?.(r.modelId, "ok");
-      else if (r.status === "failed" || r.status === "timeout") onResultRef.current?.(r.modelId, "error");
+      else if (r.status === "failed") onResultRef.current?.(r.modelId, "error");
+      else if (r.status === "inconclusive" || r.status === "timeout") onResultRef.current?.(r.modelId, "inconclusive");
       else if (r.status === "testing") onResultRef.current?.(r.modelId, "testing");
     }
     setJob((j) => (j ? {

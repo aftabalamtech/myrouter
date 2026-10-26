@@ -5,6 +5,7 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, v
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, Toggle, ConfirmModal } from "@/shared/components";
+import SharedComboFormModal from "@/shared/components/ComboFormModal";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { splitFullModel, isModelBlocked } from "@/shared/utils/modelEligibility";
@@ -192,8 +193,8 @@ export default function CombosPage() {
       )}
 
       {/* Create Modal - Use key to force remount and reset state */}
-      <ComboFormModal
-        key="create"
+       <SharedComboFormModal
+         key="create"
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         onSave={handleCreate}
@@ -201,8 +202,8 @@ export default function CombosPage() {
       />
 
       {/* Edit Modal - Use key to force remount and reset state */}
-      <ComboFormModal
-        key={editingCombo?.id || "new"}
+       <SharedComboFormModal
+         key={editingCombo?.id || "new"}
         isOpen={!!editingCombo}
         combo={editingCombo}
         onClose={() => setEditingCombo(null)}

@@ -27,7 +27,8 @@ export function sanitizeErrorMessage(message) {
 
 export function classifyTestError({ status, error }) {
   const msg = String(error || "").toLowerCase();
-  if (msg.includes("timeout") || msg.includes("timed out") || msg.includes("aborted") || msg.includes("timeouterror")) {
+  if (msg.includes("no active credentials") || msg.includes("all accounts unavailable")) return "no_connection";
+  if (status === 408 || msg.includes("timeout") || msg.includes("timed out") || msg.includes("aborted") || msg.includes("timeouterror")) {
     return "timeout";
   }
   if (status === 401 || status === 403 || msg.includes("unauthorized") || msg.includes("invalid api key")
@@ -40,7 +41,7 @@ export function classifyTestError({ status, error }) {
   if (status === 404 || msg.includes("not found") || msg.includes("no such model") || msg.includes("unknown model")) {
     return "not_found";
   }
-  if (msg.includes("econnrefused") || msg.includes("enotfound") || msg.includes("network")
+  if (status >= 500 || msg.includes("econnrefused") || msg.includes("enotfound") || msg.includes("network")
     || msg.includes("fetch failed") || msg.includes("socket") || msg.includes("econnreset") || msg.includes("etimedout")) {
     return "network";
   }
@@ -49,7 +50,7 @@ export function classifyTestError({ status, error }) {
 }
 
 export function isRetriableCode(code) {
-  return code === "timeout" || code === "network";
+  return code === "timeout" || code === "network" || code === "rate_limited";
 }
 
 export function normalizeModels(input) {
@@ -81,7 +82,7 @@ export function clampTimeoutMs(value) {
 }
 
 function emptyCounters() {
-  return { total: 0, pending: 0, testing: 0, passed: 0, failed: 0, skipped: 0, cancelled: 0, timeout: 0 };
+  return { total: 0, pending: 0, testing: 0, passed: 0, failed: 0, inconclusive: 0, skipped: 0, cancelled: 0, timeout: 0 };
 }
 
 export function summarizeResults(results) {
@@ -90,7 +91,8 @@ export function summarizeResults(results) {
   for (const r of results) {
     if (r.status === "passed") counters.passed += 1;
     else if (r.status === "failed") counters.failed += 1;
-    else if (r.status === "timeout") { counters.timeout += 1; counters.failed += 1; }
+    else if (r.status === "inconclusive") counters.inconclusive += 1;
+    else if (r.status === "timeout") { counters.timeout += 1; counters.inconclusive += 1; }
     else if (r.status === "skipped") counters.skipped += 1;
     else if (r.status === "cancelled") counters.cancelled += 1;
     else if (r.status === "testing") counters.testing += 1;
@@ -180,18 +182,23 @@ async function workerLoop(job) {
         finalRecord = { ...record, status: "cancelled", testedAt: new Date().toISOString() };
       } else if (ok) {
         finalRecord = toResultRecord(entry, "passed", outcome, null);
+      } else if (code === "no_connection") {
+        finalRecord = toResultRecord(entry, "skipped", outcome, code);
+      } else if (code === "timeout" || code === "network" || code === "rate_limited") {
+        finalRecord = toResultRecord(entry, "inconclusive", outcome, code);
       } else {
-        finalRecord = toResultRecord(entry, code === "timeout" ? "timeout" : "failed", outcome, code);
+        finalRecord = toResultRecord(entry, "failed", outcome, code);
       }
     } catch (err) {
       const message = err?.message || String(err);
       const code = classifyTestError({ status: null, error: message });
-      finalRecord = toResultRecord(entry, "failed", { error: message }, code);
+      const status = code === "timeout" || code === "network" || code === "rate_limited" ? "inconclusive" : "failed";
+      finalRecord = toResultRecord(entry, status, { error: message }, code);
     }
 
     Object.assign(record, finalRecord);
     job.current = null;
-    if (finalRecord.status === "passed" || finalRecord.status === "failed" || finalRecord.status === "timeout") {
+    if (finalRecord.status === "passed" || finalRecord.status === "failed" || finalRecord.status === "inconclusive") {
       try {
         await job.persistFn(entry.model, finalRecord);
       } catch (err) {

@@ -131,62 +131,72 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
     return { ok: true, latencyMs, error: null, status: res.status };
   }
 
-  const res = await fetch(`${baseUrl}/api/v1/chat/completions`, {
+  const request = new Request(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers,
     body: JSON.stringify({
       model,
-      max_tokens: 1,
-      stream: false,
-      messages: [{ role: "user", content: "hi" }],
+      stream: true,
+      messages: [{ role: "user", content: "Reply with OK." }],
     }),
     signal: AbortSignal.timeout(timeout),
   });
+  const { handleChat } = await import("../../../sse/handlers/chat.js");
+  const response = await handleChat(request, {
+    endpoint: "/v1/chat/completions",
+    body: { model, stream: true, messages: [{ role: "user", content: "Reply with OK." }] },
+    headers: Object.fromEntries(request.headers.entries()),
+  });
   const latencyMs = Date.now() - start;
+  const rawText = await response.text().catch(() => "");
 
-  const rawText = await res.text().catch(() => "");
-  let parsed = null;
-  try { parsed = rawText ? JSON.parse(rawText) : null; } catch {}
-
-  if (!res.ok) {
-    const detail = parsed?.error?.message || parsed?.msg || parsed?.message || parsed?.error || rawText;
-    return { ok: false, latencyMs, error: `HTTP ${res.status}${detail ? `: ${String(detail).slice(0, 240)}` : ""}`, status: res.status };
+  if (!response.ok) {
+    const detail = readErrorDetail(rawText);
+    return { ok: false, latencyMs, error: `HTTP ${response.status}${detail ? `: ${detail}` : ""}`, status: response.status };
   }
 
-  const providerStatus = parsed?.status;
-  const providerMsg = parsed?.msg || parsed?.message;
-  const hasProviderErrorStatus = providerStatus !== undefined
-    && providerStatus !== null
-    && String(providerStatus) !== "200"
-    && String(providerStatus) !== "0";
-  if (hasProviderErrorStatus && providerMsg) {
-    return {
-      ok: false,
-      latencyMs,
-      status: res.status,
-      error: `Provider status ${providerStatus}: ${String(providerMsg).slice(0, 240)}`,
-    };
+  const result = validateChatCompletion(rawText);
+  if (!result.ok) {
+    return { ok: false, latencyMs, status: response.status, error: result.error };
   }
 
-  if (parsed?.error) {
-    const providerError = parsed?.error?.message || parsed?.error || "Provider returned an error";
-    return {
-      ok: false,
-      latencyMs,
-      status: res.status,
-      error: String(providerError).slice(0, 240),
-    };
+  return { ok: true, latencyMs, error: null, status: response.status };
+}
+
+function readErrorDetail(rawText) {
+  try {
+    const parsed = rawText ? JSON.parse(rawText) : null;
+    return String(parsed?.error?.message || parsed?.msg || parsed?.message || parsed?.error || "").slice(0, 240);
+  } catch {
+    return String(rawText || "").slice(0, 240);
+  }
+}
+
+export function validateChatCompletion(rawText) {
+  let sawCompletion = false;
+  let providerError = null;
+  const consume = (chunk) => {
+    if (chunk?.error) {
+      providerError = chunk.error?.message || chunk.error;
+      return;
+    }
+    const choice = chunk?.choices?.[0];
+    const content = choice?.delta?.content ?? choice?.message?.content;
+    if (typeof content === "string" && content.trim()) sawCompletion = true;
+  };
+
+  for (const line of String(rawText || "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const data = trimmed.slice(5).trim();
+    if (!data || data === "[DONE]") continue;
+    try { consume(JSON.parse(data)); } catch {}
   }
 
-  const hasChoices = Array.isArray(parsed?.choices) && parsed.choices.length > 0;
-  if (!hasChoices) {
-    return {
-      ok: false,
-      latencyMs,
-      status: res.status,
-      error: "Provider returned no completion choices for this model",
-    };
+  if (!sawCompletion) {
+    try { consume(JSON.parse(rawText)); } catch {}
   }
-
-  return { ok: true, latencyMs, error: null, status: res.status };
+  if (providerError) return { ok: false, error: String(providerError).slice(0, 240) };
+  if (!sawCompletion) return { ok: false, error: "Provider returned no completion content for this model" };
+  return { ok: true };
 }

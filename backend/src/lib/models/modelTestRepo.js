@@ -4,13 +4,18 @@ const store = makeKv("modelTestResults");
 
 export async function saveModelTestResult(fullModel, result) {
   if (!fullModel || typeof fullModel !== "string") return;
-  await store.set(fullModel, {
+  const record = {
     status: result.status,
     latencyMs: result.latencyMs ?? null,
     errorCode: result.errorCode ?? null,
     errorMessage: result.errorMessage ?? null,
     testedAt: result.testedAt ?? new Date().toISOString(),
-  });
+  };
+  await store.set(fullModel, record);
+  if (record.status === "passed") {
+    const { autoSelectVerifiedWorkingModel } = await import("./comboAutoSelect.js");
+    await autoSelectVerifiedWorkingModel(fullModel).catch(() => {});
+  }
 }
 
 export async function getModelTestResults(providerAlias) {
