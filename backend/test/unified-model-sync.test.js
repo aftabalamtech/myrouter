@@ -134,7 +134,16 @@ describe("discovered filters + counts", () => {
     assert.deepEqual(filterDiscovered(rows, { ...ctx, status: "error" }).rows.map((r) => r.id), ["bad"]);
     assert.deepEqual(filterDiscovered(rows, { ...ctx, status: "disabled" }).rows.map((r) => r.id), ["off"]);
     assert.deepEqual(filterDiscovered(rows, { ...ctx, price: "free" }).rows.map((r) => r.id).sort(), ["off", "w-free"]);
-    assert.deepEqual(filterDiscovered(rows, { ...ctx, price: "paid" }).rows.map((r) => r.id).sort(), ["bad", "newbie", "w-paid"]);
+    assert.deepEqual(filterDiscovered(rows, { ...ctx, price: "paid" }).rows.map((r) => r.id).sort(), ["bad", "w-paid"]);
+    assert.deepEqual(filterDiscovered(rows, { ...ctx, price: "unknown" }).rows.map((r) => r.id), ["newbie"]);
+  });
+
+  it("unknown pricing is never inferred as free or paid", () => {
+    const rows = [{ id: "mystery", fullModel: "p/mystery", isFree: null }];
+    const ctx = { testResults: {}, disabledIds: [] };
+    assert.deepEqual(filterDiscovered(rows, { ...ctx, price: "all" }).rows.map((r) => r.id), ["mystery"]);
+    assert.equal(filterDiscovered(rows, { ...ctx, price: "free" }).rows.length, 0);
+    assert.equal(filterDiscovered(rows, { ...ctx, price: "paid" }).rows.length, 0);
   });
 
   it("search combines with filters (id or name)", () => {

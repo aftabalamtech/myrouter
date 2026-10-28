@@ -9,6 +9,7 @@ import { resolveQoderModels } from "../../../../../open-sse/services/qoderModels
 import { fetchWithTimeout } from "../../../../lib/net/fetchWithTimeout.js";
 import { buildCompatibleModelsUrl } from "../../../../lib/net/compatibleUrl.js";
 import { readResponseOnce, parseErrorPayload } from "../../../../lib/net/httpBody.js";
+import { fetchCatalogFollowUpPages } from "../../../../lib/net/catalogPagination.js";
 
 const GEMINI_CLI_MODELS_URL = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 
@@ -172,11 +173,20 @@ const PROVIDER_MODELS_CONFIG = {
     parseResponse: (data) => data.data || []
   },
   gemini: {
-    url: "https://generativelanguage.googleapis.com/v1beta/models",
+    url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
     method: "GET",
     headers: { "Content-Type": "application/json" },
     authQuery: "key", // Use query param for API key
-    parseResponse: (data) => data.models || []
+    parseResponse: (data) => data.models || [],
+    // Gemini DOES paginate its catalog: the default page is ~50 entries and a
+    // larger pageSize is still clamped upstream. Without following
+    // nextPageToken, discovery silently truncated to the first page.
+    pagination: {
+      query: "pageToken",
+      tokenField: "nextPageToken",
+      maxPages: 20,
+      maxModels: 5000,
+    },
   },
   qwen: {
     url: "https://portal.qwen.ai/v1/models",
@@ -525,7 +535,10 @@ export async function GET_handler(req, res, { params }) {
       url = resolveQwenModelsUrl(connection);
     }
     if (config.authQuery) {
-      url += `?${config.authQuery}=${token}`;
+      // The config URL may already carry query params (e.g. Gemini's
+      // pageSize) — append with the correct separator, never a second "?".
+      const separator = url.includes("?") ? "&" : "?";
+      url += `${separator}${config.authQuery}=${token}`;
     }
 
     // Build headers
@@ -561,6 +574,35 @@ export async function GET_handler(req, res, { params }) {
     }
 
     const models = config.parseResponse(body.json);
+
+    // Follow upstream pagination when the provider advertises a continuation
+    // token (e.g. Gemini's `nextPageToken`). Without this, a paginated catalog
+    // silently truncated to the first page — discovered-model counts lost the
+    // models on every later page.
+    const pagination = config.pagination;
+    if (pagination) {
+      const { pages, truncated } = await fetchCatalogFollowUpPages({
+        firstBody: body.json,
+        parseResponse: config.parseResponse,
+        pagination,
+        buildUrl: (t) => {
+          const separator = url.includes("?") ? "&" : "?";
+          return `${url}${separator}${pagination.query}=${encodeURIComponent(t)}`;
+        },
+        fetchPage: async (nextUrl) => {
+          const nextRes = await fetchWithTimeout(nextUrl, {
+            method: config.method,
+            headers,
+            ...(config.body && config.method === "POST" ? { body: JSON.stringify(config.body) } : {}),
+          });
+          return await readResponseOnce(nextRes);
+        },
+      });
+      for (const pageModels of pages) models.push(...pageModels);
+      if (truncated) {
+        console.warn(`Catalog pagination incomplete for ${connection.provider}; returning ${models.length} collected models`);
+      }
+    }
 
     return res.json({
       provider: connection.provider,

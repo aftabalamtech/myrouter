@@ -7,6 +7,7 @@ import {
   resolveBulkAliasEntries,
   resolveDiscoveredBulkAliasEntries,
 } from "../../../lib/models/autoAdd.js";
+import { getModelsByProviderId } from "../../../shared/constants/models.js";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,17 @@ export async function POST_handler(req, res) {
       if (!providerAlias) {
         return res.status(400).json({ error: "providerAlias is required for discovered bulk add" });
       }
+      // Built-in ids are merged SERVER-SIDE, not trusted from the client: a
+      // stale/shrunk client list must never turn hardcoded models into
+      // discoverable rows (they would get duplicate alias records and inflate
+      // the "eligible" total above what the UI shows).
+      const serverHardcodedIds = getModelsByProviderId(providerAlias).map((m) => m.id);
+      const hardcodedIds = Array.from(
+        new Set([
+          ...(Array.isArray(body.hardcodedIds) ? body.hardcodedIds.filter((id) => typeof id === "string") : []),
+          ...serverHardcodedIds,
+        ])
+      );
       const stored = await getSyncedModels(providerAlias);
       const catalog = Object.values(stored || {})
         .filter((entry) => entry && typeof entry === "object" && entry.id)
@@ -70,7 +82,7 @@ export async function POST_handler(req, res) {
         catalog,
         storageAlias: providerAlias,
         existing: existing || {},
-        hardcodedIds: Array.isArray(body.hardcodedIds) ? body.hardcodedIds : [],
+        hardcodedIds,
         search: typeof filters.search === "string" ? filters.search : "",
         status: typeof filters.status === "string" ? filters.status : "all",
         price: typeof filters.price === "string" ? filters.price : "all",

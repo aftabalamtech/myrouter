@@ -567,8 +567,11 @@ export default function ModelSyncPanel({
       {job?.finished && summary && (
         <div className="text-[11px] text-text-muted">
           <p>
-            Finished in {formatElapsed(job.elapsedMs)} — {summary.discovered} discovered, {summary.added} added, {summary.updated} updated
+            Finished in {formatElapsed(job.elapsedMs)} — {summary.discovered} discovered upstream, {summary.added} new catalog record(s), {summary.updated} catalog record(s) refreshed
             {summary.stale > 0 && `, ${summary.stale} stale`}{summary.failed > 0 && `, ${summary.failed} failed`}.
+          </p>
+          <p className="opacity-70">
+            Counters describe the discovered catalog only — "new/refreshed" does NOT add models to your model list. Use Add models below to enable them.
           </p>
           {summary.partial && (
             <p className="text-amber-600 dark:text-amber-400">

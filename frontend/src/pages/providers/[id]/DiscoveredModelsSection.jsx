@@ -403,9 +403,9 @@ export default function DiscoveredModelsSection({
           icon="add"
           onClick={handleAddAll}
           disabled={bulk?.running || rows.length === 0}
-          title={rows.length === 0 ? "No discovered models match the current filters" : `Add ${rows.length} filtered model(s)`}
+          title={`Adds ALL ${rows.length} discovered model(s) matching the current filters — not just the ${visible.length} currently rendered. ${discovered.length !== rows.length ? `Filtered from ${discovered.length} discovered upstream.` : ""} Already-added models are skipped.`}
         >
-          {bulk?.running ? `Adding ${bulk.done}/${bulk.total}…` : `Add All Models${rows.length > 0 ? ` (${rows.length})` : ""}`}
+          {bulk?.running ? `Adding ${bulk.done}/${bulk.total}…` : `Add All Filtered${rows.length > 0 ? ` (${rows.length})` : ""}`}
         </Button>
         <label
           className="flex items-center gap-1.5 text-[11px] text-text-muted cursor-pointer select-none"
