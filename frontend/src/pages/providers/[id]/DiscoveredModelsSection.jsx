@@ -39,6 +39,7 @@ const STATUS_TABS = [
   { key: "all", label: "All" },
   { key: "working", label: "Working" },
   { key: "error", label: "Error" },
+  { key: "inconclusive", label: "Inconclusive" },
   { key: "disabled", label: "Disabled" },
 ];
 
@@ -46,10 +47,12 @@ const PRICE_TABS = [
   { key: "all", label: "All prices" },
   { key: "free", label: "Free" },
   { key: "paid", label: "Paid" },
+  { key: "unknown", label: "Unknown price" },
 ];
 
 const BULK_CHUNK = 50;
-const LIST_LIMIT = 300;
+const PAGE_SIZE = 16;
+const MAX_RENDERED = 2000;
 
 function yieldToUI() {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -77,6 +80,11 @@ function statusBadge(row, testResults, disabledIds) {
       <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-500">error</span>
     );
   }
+  if (s === "inconclusive") {
+    return (
+      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">inconclusive</span>
+    );
+  }
   return (
     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sidebar text-text-muted">untested</span>
   );
@@ -98,6 +106,7 @@ export default function DiscoveredModelsSection({
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [price, setPrice] = useState("all");
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [disableRest, setDisableRest] = useState(false);
   const [bulk, setBulk] = useState(null); // { running, done, total, added, skipped, failed, disabled, error }
   const [rowError, setRowError] = useState("");
@@ -142,7 +151,11 @@ export default function DiscoveredModelsSection({
     [discovered, search, status, price, effectiveTestResults, disabledIds]
   );
 
-  const visible = rows.slice(0, LIST_LIMIT);
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [search, status, price, discovered.length]);
+
+  const visible = rows.slice(0, Math.min(visibleCount, MAX_RENDERED));
 
   // "Test All" covers the currently FILTERED discovered models, so the
   // Working/Error/Disabled counts update right after the run finishes.
@@ -154,7 +167,7 @@ export default function DiscoveredModelsSection({
       id: m.id,
       fullModel: `${storageAlias}/${m.id}`,
       kind: m.type || "llm",
-      isFree: !!m.isFree,
+      isFree: typeof m.isFree === "boolean" ? m.isFree : null,
     })),
     [discovered, storageAlias]
   );
@@ -223,22 +236,72 @@ export default function DiscoveredModelsSection({
     return { added, skipped, failed };
   };
 
+  // Server-side discovered scope: the backend re-reads the persisted catalog,
+  // so the browser's visible page (16 rows) can never limit the operation.
+  const addDiscoveredOnServer = async () => {
+    try {
+      const res = await fetch("/api/models/alias", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: "discovered",
+          providerAlias: storageAlias,
+          hardcodedIds,
+          filters: { search, status, price },
+        }),
+      });
+      if (res.status === 404 || res.status === 405) return null;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Bulk add failed (HTTP ${res.status})`);
+      return {
+        added: data.added || 0,
+        skipped: data.skipped || 0,
+        failed: data.failed || 0,
+        total: data.total || 0,
+        results: Array.isArray(data.results) ? data.results : [],
+      };
+    } catch (e) {
+      if (e?.message && !e.message.includes("Failed to fetch")) throw e;
+      return null;
+    }
+  };
+
   // Adding many models is irreversible in bulk, so confirm above a threshold
   // rather than silently writing dozens of alias records.
   const CONFIRM_THRESHOLD = 25;
   const runAddAll = async () => {
     if (bulk?.running || rows.length === 0) return;
     setRowError("");
-    const { targets, skipped } = resolveBulkAdd(rows.map((r) => ({ ...r, isAdded: false })));
-    if (targets.length === 0) {
-      setBulk({ running: false, done: 0, total: 0, added: 0, skipped, failed: 0, disabled: 0, error: "" });
-      return;
-    }
-    setBulk({ running: true, done: 0, total: targets.length, added: 0, skipped: 0, failed: 0, disabled: 0, error: "" });
-    let added = 0;
-    let skippedTotal = skipped.length;
-    let failed = 0;
+    setBulk({ running: true, done: 0, total: rows.length, added: 0, skipped: 0, failed: 0, disabled: 0, error: "" });
     try {
+      const server = await addDiscoveredOnServer();
+      if (server) {
+        const failureReasons = server.results
+          .filter((r) => r.status === "failed" && r.reason)
+          .slice(0, 3)
+          .map((r) => `${r.model}: ${r.reason}`);
+        setBulk({
+          running: false,
+          done: server.total,
+          total: server.total,
+          added: server.added,
+          skipped: server.skipped,
+          failed: server.failed,
+          disabled: 0,
+          error: failureReasons.join(" · "),
+        });
+        onChanged?.();
+        return;
+      }
+
+      const { targets, skipped } = resolveBulkAdd(rows.map((r) => ({ ...r, isAdded: false })));
+      if (targets.length === 0) {
+        setBulk({ running: false, done: 0, total: 0, added: 0, skipped, failed: 0, disabled: 0, error: "" });
+        return;
+      }
+      let added = 0;
+      let skippedTotal = skipped.length;
+      let failed = 0;
       // Chunked with UI yields so large catalogs never freeze the page.
       for (let i = 0; i < targets.length; i += BULK_CHUNK) {
         const chunk = targets.slice(i, i + BULK_CHUNK);
@@ -282,7 +345,7 @@ export default function DiscoveredModelsSection({
       });
       onChanged?.();
     } catch (e) {
-      setBulk((b) => ({ ...(b || {}), running: false, added, failed, error: e?.message || "Bulk add failed" }));
+      setBulk((b) => ({ ...(b || {}), running: false, error: e?.message || "Bulk add failed" }));
       onChanged?.();
     }
   };
@@ -484,8 +547,36 @@ export default function DiscoveredModelsSection({
             : "No discovered models match the current filters."}
         </p>
       )}
-      {rows.length > LIST_LIMIT && (
-        <p className="text-[10px] text-text-muted mt-1">Showing first {LIST_LIMIT} of {rows.length}.</p>
+      {rows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mt-2">
+          <span className="text-[10px] text-text-muted">
+            Showing {visible.length} of {rows.length}
+            {discovered.length !== rows.length ? ` (filtered from ${discovered.length})` : ""}
+          </span>
+          {visible.length < rows.length && (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setVisibleCount((n) => Math.min(rows.length, n + PAGE_SIZE))}
+              >
+                Load {Math.min(PAGE_SIZE, rows.length - visible.length)} more
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setVisibleCount(Math.min(MAX_RENDERED, rows.length))}
+              >
+                Show all {Math.min(MAX_RENDERED, rows.length)}
+              </Button>
+            </>
+          )}
+          {rows.length > MAX_RENDERED && (
+            <span className="text-[10px] text-amber-600 dark:text-amber-400">
+              Rendering first {MAX_RENDERED}; Add All still applies to all {rows.length}.
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

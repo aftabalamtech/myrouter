@@ -136,6 +136,7 @@ export function testStatusOf(fullModel, testResults) {
   const raw = testResults?.[fullModel];
   const status = typeof raw === "string" ? raw : raw?.status;
   if (status === "ok" || status === "passed") return "ok";
+  if (status === "inconclusive") return "inconclusive";
   if (status === "error" || status === "failed" || status === "timeout")
     return "error";
   return "untested";
@@ -192,8 +193,10 @@ function matchesSearch(row, search) {
 }
 
 function matchesPrice(row, price) {
-  if (price === "free") return row?.isFree === true;
-  if (price === "paid") return row?.isFree !== true; // unknown pricing counts as paid
+  const known = typeof row?.isFree === "boolean";
+  if (price === "free") return row.isFree === true;
+  if (price === "paid") return row.isFree === false;
+  if (price === "unknown") return !known;
   return true;
 }
 
@@ -207,6 +210,8 @@ function matchesStatus(row, status, { testResults, disabledIds }) {
       return testStatus === "ok" && !disabled;
     case "error":
       return testStatus === "error";
+    case "inconclusive":
+      return testStatus === "inconclusive";
     case "disabled":
       return disabled;
     case "all":
@@ -240,11 +245,15 @@ export function filterDiscovered(
     error: countBy(statusBase, (r) =>
       matchesStatus(r, "error", { testResults, disabledIds })
     ),
+    inconclusive: countBy(statusBase, (r) =>
+      matchesStatus(r, "inconclusive", { testResults, disabledIds })
+    ),
     disabled: countBy(statusBase, (r) =>
       matchesStatus(r, "disabled", { testResults, disabledIds })
     ),
     free: countBy(priceBase, (r) => matchesPrice(r, "free")),
     paid: countBy(priceBase, (r) => matchesPrice(r, "paid")),
+    unknown: countBy(priceBase, (r) => matchesPrice(r, "unknown")),
   };
   return { rows: base, counts };
 }
@@ -292,6 +301,7 @@ export function resolveBulkAliasEntries(entries, existing) {
     Object.values(known).filter((v) => typeof v === "string")
   );
   const toAdd = [];
+  const results = [];
   let skipped = 0;
   let failed = 0;
   const list = Array.isArray(entries) ? entries.slice(0, 2000) : [];
@@ -300,22 +310,69 @@ export function resolveBulkAliasEntries(entries, existing) {
     const alias = typeof entry?.alias === "string" ? entry.alias : "";
     if (!model || !alias) {
       failed += 1;
+      results.push({ model, alias, status: "failed", reason: "Model and alias are required" });
       continue;
     }
     const current = known[alias];
     if (current === model || knownModels.has(model)) {
       skipped += 1;
+      results.push({ model, alias, status: "skipped", reason: "Already added" });
       continue;
     }
     if (current !== undefined && current !== model) {
       failed += 1;
+      results.push({ model, alias, status: "failed", reason: "Alias already maps to a different model" });
       continue;
     }
     toAdd.push({ model, alias });
+    results.push({ model, alias, status: "pending", reason: "" });
     known[alias] = model;
     knownModels.add(model);
   }
-  return { toAdd, skipped, failed };
+  return { toAdd, results, skipped, failed };
+}
+
+export function defaultAliasForModel(modelId) {
+  const parts = String(modelId || "").split("/");
+  return parts[parts.length - 1] || String(modelId || "");
+}
+
+// Server-side "Add All Discovered" resolution. The client sends only the
+// provider and the active filters; the server re-reads the persisted catalog so
+// a stale/truncated browser list can never limit how many models are added.
+export function resolveDiscoveredBulkAliasEntries({
+  catalog,
+  storageAlias,
+  existing,
+  hardcodedIds,
+  search = "",
+  status = "all",
+  price = "all",
+  testResults,
+  disabledIds,
+} = {}) {
+  const addedFullModels = new Set(
+    Object.values(existing || {}).filter((v) => typeof v === "string")
+  );
+  const { discovered } = partitionDiscovered({
+    catalog,
+    storageAlias,
+    addedFullModels,
+    hardcodedIds,
+  });
+  const { rows } = filterDiscovered(discovered, {
+    search,
+    status,
+    price,
+    testResults,
+    disabledIds,
+  });
+  const entries = rows.map((row) => ({
+    model: row.fullModel,
+    alias: defaultAliasForModel(row.id),
+  }));
+  const resolved = resolveBulkAliasEntries(entries, existing);
+  return { ...resolved, total: entries.length };
 }
 
 // Auto-Add policy resolution over discovered-only (unadded) rows.
@@ -353,7 +410,7 @@ export function resolveAutoAdd({
       }
       continue;
     }
-    // status === "untested"
+    // status === "untested" or "inconclusive": unknown, never failed.
     if (effective === "working-untested" || includeUntested) toAdd.push(id);
   }
   return { toAdd, toDisable };

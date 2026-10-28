@@ -98,7 +98,7 @@ export default function ModelsPage() {
   const PAGE_SIZE = 100;
   const [visibility, setVisibility] = useState("all"); // all | visible | hidden
   const [statusFilter, setStatusFilter] = useState("all"); // all | working | error | hidden | disabled
-  const [price, setPrice] = useState("all"); // all | free | paid
+  const [price, setPrice] = useState("all"); // all | free | paid | unknown
   const [freeFirst, setFreeFirst] = useState(false);
   const [autoHideFailed, setAutoHideFailed] = useState(false);
 
@@ -139,6 +139,7 @@ export default function ModelsPage() {
         const mapped = {};
         for (const [fullModel, r] of Object.entries(all)) {
           if (r?.status === "passed") mapped[fullModel] = "ok";
+          else if (r?.status === "inconclusive") mapped[fullModel] = "inconclusive";
           else if (r?.status === "failed" || r?.status === "timeout") mapped[fullModel] = "error";
         }
         setTestResults(mapped);
@@ -237,7 +238,7 @@ export default function ModelsPage() {
         fullModel,
         name: m.name || m.id,
         kind: kindOf(m),
-        isFree: !!m.isFree,
+        isFree: typeof m.isFree === "boolean" ? m.isFree : null,
         isCustom: true,
         hidden: hiddenByAlias(storageAlias).has(m.id),
         hasConnection: provider ? connectedProviders.has(providerId) : true,
@@ -320,7 +321,7 @@ export default function ModelsPage() {
       return {
         ...e,
         disabled: isModelBlocked(e.providerId, e.providerAlias, e.id, blocksMap),
-        testStatus: ts === "ok" ? "ok" : ts === "error" ? "error" : "untested",
+        testStatus: ts === "ok" ? "ok" : ts === "error" ? "error" : ts === "inconclusive" ? "inconclusive" : "untested",
       };
     }).filter((e) => {
       if (statusFilter === "disabled") {
@@ -331,8 +332,9 @@ export default function ModelsPage() {
         if (visibility === "hidden" && !e.hidden) return false;
       }
       if (!matchesStatusFilter({ testStatus: e.testStatus, hidden: e.hidden, blocked: e.disabled }, statusFilter)) return false;
-      if (price === "free" && !e.isFree) return false;
-      if (price === "paid" && e.isFree) return false;
+      if (price === "free" && e.isFree !== true) return false;
+      if (price === "paid" && e.isFree !== false) return false;
+      if (price === "unknown" && typeof e.isFree === "boolean") return false;
       if (q && !`${e.fullModel} ${e.name}`.toLowerCase().includes(q)) return false;
       return true;
     });
@@ -554,12 +556,12 @@ export default function ModelsPage() {
         ))}
         <span className="text-text-muted/40 text-xs select-none">|</span>
         {[
-          ["all", "All statuses"], ["working", "Working"], ["error", "Error"], ["hidden", "Hidden"], ["disabled", "Disabled"],
+          ["all", "All statuses"], ["working", "Working"], ["error", "Error"], ["inconclusive", "Inconclusive"], ["hidden", "Hidden"], ["disabled", "Disabled"],
         ].map(([v, label]) => (
           <button key={`status-${v}`} onClick={() => setStatusFilter(v)} title={v === "all" ? "Show all statuses" : `Show ${label.toLowerCase()} models`} className={`px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${statusFilter === v ? "bg-red-500 text-white border-red-500" : "border-border text-text-muted hover:text-primary"}`}>{label}</button>
         ))}
         {[
-          ["all", "All"], ["free", "Free only"], ["paid", "Paid only"],
+          ["all", "All"], ["free", "Free only"], ["paid", "Paid only"], ["unknown", "Unknown price"],
         ].map(([v, label]) => (
           <button key={v} onClick={() => setPrice(v)} className={`px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${price === v ? "bg-red-500 text-white border-red-500" : "border-border text-text-muted hover:text-primary"}`}>{label}</button>
         ))}
@@ -593,8 +595,8 @@ export default function ModelsPage() {
             ? entry.name
             : "";
           return (
-            <div key={entry.key} className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border bg-card ${entry.disabled ? "border-amber-500/40 opacity-80" : status === "ok" ? "border-green-500/40" : status === "error" ? "border-red-500/40" : "border-border"}`}>
-              <span className="material-symbols-outlined text-lg shrink-0" style={status === "ok" ? { color: "#22c55e" } : status === "error" ? { color: "#ef4444" } : undefined}>smart_toy</span>
+            <div key={entry.key} className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border bg-card ${entry.disabled ? "border-amber-500/40 opacity-80" : status === "ok" ? "border-green-500/40" : status === "error" ? "border-red-500/40" : status === "inconclusive" ? "border-amber-500/40" : "border-border"}`}>
+              <span className="material-symbols-outlined text-lg shrink-0" style={status === "ok" ? { color: "#22c55e" } : status === "error" ? { color: "#ef4444" } : status === "inconclusive" ? { color: "#f59e0b" } : undefined}>smart_toy</span>
               <div className="flex flex-col gap-1 min-w-0 flex-1">
                 <span
                   className="text-xs text-text-muted font-mono truncate"
@@ -604,12 +606,15 @@ export default function ModelsPage() {
                 </span>
                 <div className="flex items-center gap-1.5">
                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sidebar text-text-muted">{entry.isCustom ? "CUSTOM" : "BUILT-IN"}</span>
-                  {entry.isFree && <span className="text-[9px] font-bold text-green-500 bg-green-500/10 px-1.5 py-0.5 rounded">FREE</span>}
+                  {entry.isFree === true && <span className="text-[9px] font-bold text-green-500 bg-green-500/10 px-1.5 py-0.5 rounded">FREE</span>}
+                  {entry.isFree === false && <span className="text-[9px] font-bold text-text-muted bg-sidebar px-1.5 py-0.5 rounded">PAID</span>}
+                  {typeof entry.isFree !== "boolean" && <span className="text-[9px] font-bold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">PRICE ?</span>}
                   {entry.disabled && <span className="text-[9px] font-bold text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded">DISABLED</span>}
                   {entry.hidden && !entry.disabled && <span className="text-[9px] font-bold text-text-muted bg-sidebar px-1.5 py-0.5 rounded">HIDDEN</span>}
                   {secondaryName && <span className="text-[10px] text-text-muted/70 italic truncate">{secondaryName}</span>}
                   {status === "ok" && <span className="material-symbols-outlined text-sm" style={{ color: "#22c55e" }}>check_circle</span>}
                   {status === "error" && <span className="material-symbols-outlined text-sm" style={{ color: "#ef4444" }}>cancel</span>}
+                  {status === "inconclusive" && <span className="material-symbols-outlined text-sm" style={{ color: "#f59e0b" }}>help</span>}
                 </div>
               </div>
               <button onClick={() => handleSingleTest(entry)} disabled={testing || !entry.hasConnection || entry.disabled} title={entry.disabled ? "Disabled — re-enable to test" : entry.hasConnection ? "Test model" : "No connection"} className="p-1 rounded text-text-muted hover:text-primary hover:bg-sidebar disabled:opacity-40">

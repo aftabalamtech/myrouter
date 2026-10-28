@@ -101,8 +101,10 @@ function matchesSearch(row, search) {
 }
 
 function matchesPrice(row, price) {
-  if (price === "free") return row?.isFree === true;
-  if (price === "paid") return row?.isFree !== true;
+  const known = typeof row?.isFree === "boolean";
+  if (price === "free") return row.isFree === true;
+  if (price === "paid") return row.isFree === false;
+  if (price === "unknown") return !known;
   return true;
 }
 
@@ -114,6 +116,8 @@ function matchesStatus(row, status, { testResults, disabledIds }) {
       return testStatus === "ok" && !disabled;
     case "error":
       return testStatus === "error";
+    case "inconclusive":
+      return testStatus === "inconclusive";
     case "disabled":
       return disabled;
     case "all":
@@ -139,9 +143,11 @@ export function filterDiscovered(
     all: searchOnly.filter((r) => matchesPrice(r, price)).length,
     working: countBy(statusBase, (r) => matchesStatus(r, "working", ctx)),
     error: countBy(statusBase, (r) => matchesStatus(r, "error", ctx)),
+    inconclusive: countBy(statusBase, (r) => matchesStatus(r, "inconclusive", ctx)),
     disabled: countBy(statusBase, (r) => matchesStatus(r, "disabled", ctx)),
     free: countBy(priceBase, (r) => matchesPrice(r, "free")),
     paid: countBy(priceBase, (r) => matchesPrice(r, "paid")),
+    unknown: countBy(priceBase, (r) => matchesPrice(r, "unknown")),
   };
   return { rows: base, counts };
 }

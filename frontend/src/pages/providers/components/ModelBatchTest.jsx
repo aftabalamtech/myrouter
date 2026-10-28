@@ -175,8 +175,9 @@ export default function ModelBatchTest({ models, disabled, testResults, onResult
   }, [pollSnapshot, subscribe, timeoutMs, concurrency]);
 
   const scopedModels = (s) => {
-    if (s === "free") return models.filter((m) => m.isFree);
-    if (s === "paid") return models.filter((m) => !m.isFree);
+    if (s === "free") return models.filter((m) => m.isFree === true);
+    if (s === "paid") return models.filter((m) => m.isFree === false);
+    if (s === "unknown") return models.filter((m) => typeof m.isFree !== "boolean");
     return models;
   };
 
@@ -218,6 +219,7 @@ export default function ModelBatchTest({ models, disabled, testResults, onResult
             <option value="all">All models</option>
             <option value="free">Free only</option>
             <option value="paid">Paid only</option>
+            <option value="unknown">Unknown price</option>
           </select>
         )}
         <Button onClick={handleTestAll} disabled={active || disabled || scopedModels(scope).length === 0} variant="secondary">

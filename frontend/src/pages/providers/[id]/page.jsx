@@ -251,6 +251,7 @@ export default function ProviderDetailPage() {
         const id = full.slice(prefix.length);
         const st = typeof rec === "string" ? rec : rec?.status;
         if (st === "passed" || st === "ok") mapped[id] = "ok";
+        else if (st === "inconclusive") mapped[id] = "inconclusive";
         else if (st === "failed" || st === "timeout" || st === "error") mapped[id] = "error";
       }
       if (Object.keys(mapped).length > 0) {

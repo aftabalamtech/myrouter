@@ -7,7 +7,8 @@
 // - blocked (/api/models/blocks, keyed {aliasOrId: [modelId]}):
 //   removed from normal lists AND rejected at request time (HTTP 403).
 // - test status (/api/models/test-results, keyed "alias/model"):
-//   "ok" (passed) | "error" (failed/timeout) | "untested" (no record).
+//   "ok" (passed) | "error" (failed) | "inconclusive" (timeout/unknown) |
+//   "untested" (no record).
 
 export function splitFullModel(fullModel) {
   const s = String(fullModel || "");
@@ -36,11 +37,12 @@ export function isModelBlocked(providerId, providerAlias, modelId, blocksMap) {
   return idsIn(blocksMap, [providerId, providerAlias]).has(modelId);
 }
 
-// testResults: { "alias/model": "ok" | "error" } (Models page mapping)
+// testResults: { "alias/model": "ok" | "error" | "inconclusive" }
 export function getTestStatus(fullModel, testResults) {
   const s = testResults?.[fullModel];
   if (s === "ok") return "ok";
   if (s === "error") return "error";
+  if (s === "inconclusive") return "inconclusive";
   return "untested";
 }
 
@@ -63,6 +65,8 @@ export function matchesStatusFilter({ testStatus, hidden, blocked }, statusFilte
       return testStatus === "ok" && !hidden && !blocked;
     case "error":
       return testStatus === "error";
+    case "inconclusive":
+      return testStatus === "inconclusive";
     case "hidden":
       return hidden;
     case "disabled":
