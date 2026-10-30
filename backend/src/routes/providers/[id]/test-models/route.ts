@@ -4,6 +4,7 @@ import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "../../../../../open-sse
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "../../../../shared/constants/providers.js";
 import { UPDATER_CONFIG } from "../../../../shared/constants/config.js";
 import { pingModelByKind } from "../../../models/test/ping.js";
+import { isConnectionProviderBlocked, providerBlockedMessage } from "../../../../lib/models/connectionHealth.js";
 
 /**
  * POST /api/providers/[id]/test-models
@@ -39,6 +40,31 @@ export async function POST_handler(req, res, { params }) {
 
     if (models.length === 0) {
       return res.status(400).json({ error: "No models configured for this provider" });
+    }
+
+    // Provider-level guard (task §2): when the connection already carries an
+    // account-level restriction (e.g. Google VALIDATION_REQUIRED), re-pinging
+    // every model cannot succeed — skip the tests and mark all models with
+    // the shared reason. The manual retry path (fix account → Re-test)
+    // stays available.
+    if (isConnectionProviderBlocked(connection).blocked) {
+      const message = providerBlockedMessage(providerId);
+      const results = models.map((m) => ({
+        modelId: m.id,
+        name: m.name || m.id,
+        ok: false,
+        status: "skipped",
+        skipped: true,
+        latencyMs: null,
+        errorCode: "provider_blocked",
+        errorMessage: message,
+      }));
+      return res.json({
+        provider: providerId,
+        connectionId: id,
+        providerBlocked: true,
+        results,
+      });
     }
 
     // Warm up with first model to trigger token refresh (if needed) before parallel calls.

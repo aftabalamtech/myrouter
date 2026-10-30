@@ -53,6 +53,13 @@ const DEFAULT_SETTINGS = {
   ammail_cf_telegram_bot_token: "",
   ammail_cf_workers_dev_url: "",
   leonardo_invite_link: "",
+  // §3: user-configured Google OAuth credentials for Antigravity (headless
+  // deployments). Empty = use the built-in loopback-only IDE client. The
+  // redirect URI is stored separately so the exact value registered in
+  // Google Cloud Console can be shown/copied in the UI.
+  antigravityOAuthClientId: "",
+  antigravityOAuthClientSecret: "",
+  antigravityOAuthRedirectUri: "",
   codebuddy_2captcha_api_key: "",
 };
 

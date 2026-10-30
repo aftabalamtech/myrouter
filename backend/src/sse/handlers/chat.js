@@ -21,6 +21,7 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { isModelBlocked, partitionComboModels, loadBlocks } from "../../lib/models/eligibility.js";
 import { PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
+import { sanitizeErrorMessage } from "../../lib/models/testBatch.js";
 
 /**
  * Handle chat completion request
@@ -198,6 +199,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
   // Try with available accounts (fallback on errors)
   const excludeConnectionIds = new Set();
+  // Per-attempt fallback trail (§3): original request → actual destination
+  // (always the SAME provider/model here), the account tried, and the
+  // sanitized reason it was skipped. Cross-provider substitution never
+  // happens in this loop; combos fall back only per their explicit
+  // user-configured strategy.
+  const fallbackTrail = [];
   let lastError = null;
   let lastStatus = null;
 
@@ -206,8 +213,17 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
+      // §3: make every fallback attempt visible in diagnostics — sanitized
+      // trail (account, status, reason) logged and echoed in the message.
+      const trailReasons = fallbackTrail
+        .map((t) => `${t.account} → ${t.status ?? "?"}: ${t.reason}`)
+        .join(" | ");
+      if (trailReasons) log.warn("ROUTING", `Fallback trail for ${modelStr}: ${trailReasons}`);
+      const trailSummary = fallbackTrail.length > 0
+        ? ` [fallback trail: ${fallbackTrail.map((t) => `${t.account} → ${t.status ?? "?"}`).join(" | ")}]`
+        : "";
       if (credentials?.allRateLimited) {
-        const errorMsg = lastError || credentials.lastError || "Unavailable";
+        const errorMsg = sanitizeErrorMessage(`${lastError || credentials.lastError || "Unavailable"}${trailReasons ? ` | ${trailReasons}` : ""}`);
         const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
         log.warn("CHAT", `[${provider}/${model}] ${errorMsg} (${credentials.retryAfterHuman})`);
         return unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman);
@@ -217,7 +233,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         return errorResponse(HTTP_STATUS.NOT_FOUND, `No active credentials for provider: ${provider}`);
       }
       log.warn("CHAT", "No more accounts available", { provider });
-      return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
+      return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, `${lastError || "All accounts unavailable"}${trailSummary}`);
     }
 
     // Log account selection
@@ -273,6 +289,13 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
 
     if (shouldFallback) {
       log.warn("AUTH", `Account ${credentials.connectionName} unavailable (${result.status}), trying fallback (same provider ${provider}, same model ${model})`);
+      fallbackTrail.push({
+        requested: modelStr,
+        destination: `${provider}/${model}`,
+        account: credentials.connectionName || credentials.connectionId,
+        status: result.status ?? null,
+        reason: sanitizeErrorMessage(result.error || ""),
+      });
       excludeConnectionIds.add(credentials.connectionId);
       lastError = result.error;
       lastStatus = result.status;

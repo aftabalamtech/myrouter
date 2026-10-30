@@ -1,9 +1,14 @@
-import crypto from "crypto";
 import open from "open";
 import { ANTIGRAVITY_CONFIG, getOAuthClientMetadata } from "../constants/oauth.js";
 import { getServerCredentials } from "../config/index.js";
 import { startLocalServer } from "../utils/server.js";
+import { generatePKCE } from "../utils/pkce.js";
 import { spinner as createSpinner } from "../utils/ui.js";
+
+// The Antigravity Google client only has http://localhost:51121/oauth-callback
+// registered. A random port (the previous behavior) produces
+// redirect_uri_mismatch. Keep this exact value for the CLI flow too.
+export const ANTIGRAVITY_CLI_REDIRECT_URI = "http://localhost:51121/oauth-callback";
 
 /**
  * Antigravity OAuth Service
@@ -11,13 +16,17 @@ import { spinner as createSpinner } from "../utils/ui.js";
  */
 export class AntigravityService {
   constructor() {
-    this.config = ANTIGRAVITY_CONFIG;
+    this.config = {
+      ...ANTIGRAVITY_CONFIG,
+      clientId: process.env.ANTIGRAVITY_OAUTH_CLIENT_ID?.trim() || ANTIGRAVITY_CONFIG.clientId,
+      clientSecret: process.env.ANTIGRAVITY_OAUTH_CLIENT_SECRET?.trim() || ANTIGRAVITY_CONFIG.clientSecret,
+    };
   }
 
   /**
    * Build Antigravity authorization URL
    */
-  buildAuthUrl(redirectUri, state) {
+  buildAuthUrl(redirectUri, state, codeChallenge) {
     const params = new URLSearchParams({
       client_id: this.config.clientId,
       response_type: "code",
@@ -26,7 +35,12 @@ export class AntigravityService {
       state: state,
       access_type: "offline",
       prompt: "consent",
+      include_granted_scopes: "true",
     });
+    if (codeChallenge) {
+      params.set("code_challenge", codeChallenge);
+      params.set("code_challenge_method", "S256");
+    }
 
     return `${this.config.authorizeUrl}?${params.toString()}`;
   }
@@ -34,20 +48,23 @@ export class AntigravityService {
   /**
    * Exchange authorization code for tokens
    */
-  async exchangeCode(code, redirectUri) {
+  async exchangeCode(code, redirectUri, codeVerifier) {
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: this.config.clientId,
+      client_secret: this.config.clientSecret,
+      code: code,
+      redirect_uri: redirectUri,
+    });
+    if (codeVerifier) body.set("code_verifier", codeVerifier);
+
     const response = await fetch(this.config.tokenUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
       },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: this.config.clientId,
-        client_secret: this.config.clientSecret,
-        code: code,
-        redirect_uri: redirectUri,
-      }),
+      body,
     });
 
     if (!response.ok) {
@@ -232,20 +249,20 @@ export class AntigravityService {
     try {
       spinner.text = "Starting local server...";
 
-      // Start local server for callback
+      // The registered Antigravity callback is a FIXED loopback URI. Using a
+      // random port (the old behavior) causes Google's redirect_uri_mismatch.
       let callbackParams = null;
       const { port, close } = await startLocalServer((params) => {
         callbackParams = params;
-      });
+      }, 51121);
 
-      const redirectUri = `http://localhost:${port}/callback`;
+      const redirectUri = ANTIGRAVITY_CLI_REDIRECT_URI;
       spinner.succeed(`Local server started on port ${port}`);
 
-      // Generate state
-      const state = crypto.randomBytes(32).toString("base64url");
+      const { codeVerifier, codeChallenge, state } = generatePKCE();
 
       // Build authorization URL
-      const authUrl = this.buildAuthUrl(redirectUri, state);
+      const authUrl = this.buildAuthUrl(redirectUri, state, codeChallenge);
 
       console.log("\nOpening browser for Antigravity authentication...");
       console.log(`If browser doesn't open, visit:\n${authUrl}\n`);
@@ -279,11 +296,15 @@ export class AntigravityService {
       if (!callbackParams.code) {
         throw new Error("No authorization code received");
       }
+      if (callbackParams.state !== state) {
+        throw new Error("Antigravity OAuth state mismatch — restart the login flow.");
+      }
 
       spinner.start("Exchanging code for tokens...");
 
-      // Exchange code for tokens
-      const tokens = await this.exchangeCode(callbackParams.code, redirectUri);
+      // Exchange code for tokens using the exact redirect URI and PKCE
+      // verifier from the authorization request.
+      const tokens = await this.exchangeCode(callbackParams.code, redirectUri, codeVerifier);
 
       spinner.text = "Fetching user info...";
 

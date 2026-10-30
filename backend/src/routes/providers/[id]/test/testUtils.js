@@ -20,6 +20,8 @@ import {
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
 import { buildCompatibleChatUrl, buildCompatibleModelsUrl } from "@/lib/net/compatibleUrl";
+import { runAntigravityProbe } from "./antigravityProbe.js";
+import { statusUpdateFromResult } from "@/lib/models/connectionHealth.js";
 
 async function readResponseError(response) {
   const text = await response.text().catch(() => "");
@@ -291,6 +293,7 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
   let newTokens = null;
 
   const tokenExpired = isTokenExpired(connection);
+
   if (config.refreshable && tokenExpired && connection.refreshToken) {
     const tokens = await refreshOAuthToken(connection);
     if (tokens) {
@@ -306,6 +309,33 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
     if (refreshed) return { valid: true, error: null, refreshed, newTokens };
     if (tokenExpired) return { valid: false, error: "Token expired", refreshed: false };
     return { valid: true, error: null, refreshed: false, newTokens: null };
+  }
+
+  // Antigravity: test the REAL inference path (cloudcode-pa), not the
+  // userinfo endpoint. A valid token passes userinfo while every model fails
+  // at the inference endpoint with 403 VALIDATION_REQUIRED (task §1).
+  if (connection.provider === "antigravity") {
+    const probe = await runAntigravityProbe({
+      connection,
+      accessToken,
+      refreshFn: refreshOAuthToken,
+      fetchFn: (url, opts) => fetchWithConnectionProxy(url, opts, effectiveProxy),
+      refreshed,
+      newTokens,
+    });
+    return {
+      valid: probe.valid,
+      error: probe.error,
+      refreshed: probe.refreshed,
+      newTokens: probe.newTokens,
+      testStatus: probe.testStatus,
+      category: probe.category,
+      httpStatus: probe.httpStatus,
+      upstreamCode: probe.upstreamCode,
+      detail: probe.detail,
+      providerBlocked: probe.providerBlocked,
+      recommendedAction: probe.recommendedAction,
+    };
   }
 
   if (connection.provider === "cline") {
@@ -819,11 +849,10 @@ export async function testSingleConnection(id) {
 
   const latencyMs = Date.now() - start;
 
-  const updateData = {
-    testStatus: result.valid ? "active" : "error",
-    lastError: result.valid ? null : result.error,
-    lastErrorAt: result.valid ? null : new Date().toISOString(),
-  };
+  // Central status/classification persistence (task §1/§4): sanitized
+  // category, HTTP status and upstream code ride along with testStatus; a
+  // success CLEARS them so a healed account removes the blocked state.
+  const updateData = statusUpdateFromResult(result, { testedAt: new Date().toISOString() });
 
   if (result.balance !== undefined) {
     updateData.last_balance = result.balance;
@@ -852,5 +881,17 @@ export async function testSingleConnection(id) {
 
   await updateProviderConnection(id, updateData);
 
-  return { valid: result.valid, error: result.error, refreshed: !!result.refreshed, latencyMs, testedAt: new Date().toISOString() };
+  return {
+    valid: result.valid,
+    error: result.error,
+    refreshed: !!result.refreshed,
+    latencyMs,
+    testedAt: new Date().toISOString(),
+    testStatus: updateData.testStatus,
+    category: updateData.lastErrorCategory,
+    httpStatus: updateData.lastErrorHttpStatus,
+    upstreamCode: updateData.lastErrorUpstreamCode,
+    providerBlocked: updateData.testStatus === "action_required",
+    recommendedAction: result.recommendedAction || null,
+  };
 }

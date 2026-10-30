@@ -2,6 +2,9 @@ import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { pingModelByKind } from "../../routes/models/test/ping.js";
 import { saveModelTestResult } from "./modelTestRepo.js";
+import { providerModelTestGuards } from "./connectionHealth.js";
+import { getProviderConnections } from "../localDb.js";
+import { PROVIDER_ID_TO_ALIAS } from "../../../open-sse/config/providerModels.js";
 
 export const DEFAULT_CONCURRENCY = 4;
 export const MIN_CONCURRENCY = 1;
@@ -165,6 +168,23 @@ async function workerLoop(job) {
     const entry = job.queue.shift();
     if (!entry) return;
     const record = job.results.find((r) => r.modelId === entry.model);
+
+    // Provider-level guard (task §2): a provider whose EVERY active
+    // connection carries an account-level restriction (e.g. Google's
+    // VALIDATION_REQUIRED eligibility gate) cannot succeed per-model.
+    // Mark skipped with the shared reason instead of re-pinging each model.
+    const providerAlias = String(entry.model).split("/")[0];
+    const guard = job.providerGuards?.get(providerAlias);
+    if (guard?.blocked) {
+      record.status = "skipped";
+      record.errorCode = "provider_blocked";
+      record.errorMessage = sanitizeErrorMessage(guard.message);
+      record.testedAt = new Date().toISOString();
+      job.current = null;
+      job.emitter.emit("update", jobSnapshot(job));
+      continue;
+    }
+
     record.status = "testing";
     job.current = entry.model;
     job.emitter.emit("update", jobSnapshot(job));
@@ -219,6 +239,18 @@ export async function createTestJob({ models, concurrency, timeoutMs, pingFn, pe
   }
   sweepExpiredJobs();
 
+  // Provider-level guards, keyed by model-string alias (e.g. "ag" →
+  // antigravity guard). DB hiccups fail open: no guard, normal per-model
+  // tests still run (task §2 guard is an optimization with safe fallback).
+  let providerGuards = new Map();
+  try {
+    const connections = await getProviderConnections();
+    const guards = providerModelTestGuards(connections);
+    for (const [provider, g] of guards) {
+      providerGuards.set(PROVIDER_ID_TO_ALIAS[provider] || provider, g);
+    }
+  } catch { /* no DB → no guards */ }
+
   const job = {
     id: randomUUID(),
     status: "running",
@@ -240,6 +272,7 @@ export async function createTestJob({ models, concurrency, timeoutMs, pingFn, pe
     startedAt: Date.now(),
     finishedAt: null,
     emitter: new EventEmitter(),
+    providerGuards,
     pingFn: pingFn || ((model, kind, ms) => pingModelByKind(model, kind, undefined, ms)),
     persistFn: persistFn || saveModelTestResult,
   };

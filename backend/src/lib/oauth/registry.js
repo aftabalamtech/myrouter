@@ -31,11 +31,11 @@ const META = {
   antigravity: {
     displayName: "Antigravity",
     description: "Google-account sign-in for Antigravity CLI models.",
-    docsUrl: "https://console.cloud.google.com/",
+    docsUrl: "https://console.cloud.google.com/apis/credentials",
     apiFormats: ["anthropic", "openai"],
     discovery: { supported: true, via: "native" },
     extras: { proxyCallback: true },
-    notice: "Google only releases the authorization code once, to the browser that approves the sign-in on this computer. Approve it locally, or forward the dashboard port over SSH and reload through the tunnel. For headless use without any local callback, configure your own Google OAuth credentials.",
+    notice: "The exact redirect URI must be registered on the Google OAuth client. Local dashboard: http://localhost:51121/oauth-callback. Public/headless deployments: use your own Google OAuth client and register the exact https://<your-domain>/callback value shown in Advanced configuration. Google only releases the authorization code once, to the browser that approves the sign-in.",
   },
   iflow: {
     displayName: "iFlow",

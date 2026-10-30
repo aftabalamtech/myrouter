@@ -8,6 +8,12 @@ import "open-sse/index.js";
 import crypto from "crypto";
 
 import { generatePKCE, generateState } from "./utils/pkce.js";
+import {
+  ANTIGRAVITY_FLOW_TYPE,
+  prepareAntigravityConfig,
+  buildAntigravityAuthUrl,
+  buildAntigravityTokenRequest,
+} from "./antigravityConfig.js";
 import { readJsonBody, readResponseOnce, parseErrorPayload } from "../net/httpBody.js";
 
 /**
@@ -416,35 +422,31 @@ if (!__body.okStatus) {
 
   antigravity: {
     config: ANTIGRAVITY_CONFIG,
-    flowType: "authorization_code",
+    // PKCE is supported by Google for both desktop and web OAuth clients and
+    // binds the authorization code to this browser session. The verifier is
+    // kept in the server-side session so the manual/proxy callback paths can
+    // complete the exchange without trusting client-supplied values.
+    flowType: ANTIGRAVITY_FLOW_TYPE,
+    // §3: support the user's OWN Google OAuth client where required
+    // (headless deployments: Cloud Workstations, Render, Docker+proxy).
+    // Never silently substitute an unrelated client — validating presence
+    // and format of BOTH credentials rejects half-configured setups with a
+    // clear error instead of falling back to the built-in IDE client.
+    prepareConfig: async (config, meta = {}) => prepareAntigravityConfig(config, meta),
     fixedPort: 51121,
     callbackPath: "/oauth-callback",
-    buildAuthUrl: (config, redirectUri, state) => {
-      const params = new URLSearchParams({
-        client_id: config.clientId,
-        response_type: "code",
-        redirect_uri: redirectUri,
-        scope: config.scopes.join(" "),
-        state: state,
-        access_type: "offline",
-        prompt: "consent",
-      });
-      return `${config.authorizeUrl}?${params.toString()}`;
-    },
-    exchangeToken: async (config, code, redirectUri) => {
+    buildAuthUrl: (config, redirectUri, state, codeChallenge) =>
+      buildAntigravityAuthUrl(config, redirectUri, state, codeChallenge),
+    exchangeToken: async (config, code, redirectUri, codeVerifier) => {
+      const body = buildAntigravityTokenRequest(config, code, redirectUri, codeVerifier);
+
       const response = await fetch(config.tokenUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           Accept: "application/json",
         },
-        body: new URLSearchParams({
-          grant_type: "authorization_code",
-          client_id: config.clientId,
-          client_secret: config.clientSecret,
-          code: code,
-          redirect_uri: redirectUri,
-        }),
+        body,
       });
 
       const __body = await readResponseOnce(response);

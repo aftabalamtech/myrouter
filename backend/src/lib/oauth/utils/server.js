@@ -12,7 +12,7 @@ export function startLocalServer(onCallback, fixedPort = null) {
     const server = http.createServer((req, res) => {
       const url = new URL(req.url, `http://localhost`);
 
-      if (url.pathname === "/callback" || url.pathname === "/auth/callback") {
+      if (url.pathname === "/callback" || url.pathname === "/auth/callback" || url.pathname === "/oauth-callback") {
         const params = Object.fromEntries(url.searchParams);
 
         // Send success response to browser with auto-close attempt
@@ -421,20 +421,64 @@ let antigravityProxyServer = null;
 let antigravityProxyTimeout = null;
 const ANTIGRAVITY_PROXY_TIMEOUT_MS = 300000; // 5 minutes
 const ANTIGRAVITY_PROXY_PORT = 51121;
+// Pending exchange sessions live exactly as long as the first-leg auth URL:
+// Google authorization codes expire ~10 minutes after issue, so a longer
+// session only invites code-replay.
+export const ANTIGRAVITY_SESSION_TTL_MS = 600000;
 const antigravityPendingExchanges = new Map();
 
-export function registerAntigravitySession({ state, redirectUri }) {
+/**
+ * Register (or merge) the authorize-time session. The authorization request
+ * and the token exchange MUST use the same redirect URI, PKCE verifier and
+ * OAuth client. Keeping them server-side means the manual/proxy callback
+ * paths never have to trust (or receive) the client secret again.
+ *
+ * start-proxy calls this after authorize, so this must MERGE: replacing the
+ * session would drop the verifier/credentials captured at authorize time.
+ */
+export function registerAntigravitySession({ state, redirectUri, codeVerifier, clientId, clientSecret, customClient } = {}) {
   if (!state || !redirectUri) return false;
+  const existing = antigravityPendingExchanges.get(state);
   antigravityPendingExchanges.set(state, {
-    redirectUri,
+    ...(existing || {}),
+    state,
+    // The authorize-time redirect URI is authoritative; start-proxy may only
+    // fill it in for legacy callers that never hit /authorize first.
+    redirectUri: existing?.redirectUri || redirectUri,
+    ...(codeVerifier ? { codeVerifier } : {}),
+    ...(clientId ? { clientId } : {}),
+    ...(clientSecret ? { clientSecret } : {}),
+    ...(customClient !== undefined ? { customClient } : {}),
     status: "pending",
-    createdAt: Date.now(),
+    createdAt: existing?.createdAt || Date.now(),
   });
   return true;
 }
 
 export function getAntigravitySessionStatus(state) {
-  return antigravityPendingExchanges.get(state) || null;
+  const session = antigravityPendingExchanges.get(state) || null;
+  if (!session) return null;
+  // §4: expired sessions must be rejected, not silently served — the auth
+  // code behind them is already dead for Google.
+  if (Date.now() - session.createdAt > ANTIGRAVITY_SESSION_TTL_MS) {
+    antigravityPendingExchanges.delete(state);
+    return null;
+  }
+  return session;
+}
+
+/**
+ * Client-safe session view for /poll-status. Never leak the OAuth client
+ * secret or PKCE verifier to the browser.
+ */
+export function toPublicAntigravitySession(session) {
+  if (!session) return null;
+  return {
+    status: session.status,
+    ...(session.error ? { error: session.error } : {}),
+    ...(session.connectionId ? { connectionId: session.connectionId } : {}),
+    ...(session.email ? { email: session.email } : {}),
+  };
 }
 
 export function clearAntigravitySession(state) {
@@ -459,7 +503,7 @@ export function startAntigravityProxy(appPort) {
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
       const errorParam = url.searchParams.get("error");
-      const session = state ? antigravityPendingExchanges.get(state) : null;
+      const session = state ? getAntigravitySessionStatus(state) : null;
 
       // Mode A: Server-side exchange
       if (session) {
@@ -468,6 +512,9 @@ export function startAntigravityProxy(appPort) {
             throw new Error(url.searchParams.get("error_description") || errorParam);
           }
           if (!code) throw new Error("No authorization code received");
+          if (session.customClient && (!session.clientId || !session.clientSecret)) {
+            throw new Error("OAuth client session is incomplete — restart the login flow and try again");
+          }
 
           const { exchangeTokens } = await import("../providers.js");
           const { createProviderConnection } = await import("@/models");
@@ -476,8 +523,14 @@ export function startAntigravityProxy(appPort) {
             "antigravity",
             code,
             session.redirectUri,
-            undefined,
-            state
+            session.codeVerifier,
+            state,
+            session.customClient
+              ? {
+                  antigravityClientId: session.clientId,
+                  antigravityClientSecret: session.clientSecret,
+                }
+              : undefined
           );
           const connection = await createProviderConnection({
             provider: "antigravity",

@@ -565,10 +565,11 @@ export default function ProviderDetailPage() {
     setOneByOneStopping(false);
     setOneByOneCurrentConnectionId(null);
     setOneByOneResults(queuedState);
-    setOneByOneSummary({ total: connections.length, completed: 0, passed: 0, failed: 0, stopped: false });
+    setOneByOneSummary({ total: connections.length, completed: 0, passed: 0, failed: 0, actionRequired: 0, stopped: false });
 
     let passed = 0;
     let failed = 0;
+    let actionRequired = 0;
 
     try {
       for (let index = 0; index < connections.length; index += 1) {
@@ -578,6 +579,7 @@ export default function ProviderDetailPage() {
             completed: index,
             passed,
             failed,
+            actionRequired,
             stopped: true,
           });
           break;
@@ -594,9 +596,15 @@ export default function ProviderDetailPage() {
           const res = await fetch(`/api/providers/${connection.id}/test`, { method: "POST" });
           const data = await res.json();
           const valid = !!data.valid;
+          // Account-level restriction (e.g. Google VALIDATION_REQUIRED) is
+          // neither a pass nor a generic failure — it is surfaced as its own
+          // "Action required" count so it can never masquerade as success.
+          const blocked = data.providerBlocked === true || data.testStatus === "action_required";
 
           if (valid) {
             passed += 1;
+          } else if (blocked) {
+            actionRequired += 1;
           } else {
             failed += 1;
           }
@@ -604,8 +612,13 @@ export default function ProviderDetailPage() {
           setOneByOneResults((prev) => ({
             ...prev,
             [connection.id]: {
-              state: valid ? "success" : "failed",
+              state: valid ? "success" : (blocked ? "action_required" : "failed"),
               error: valid ? null : (data.error || null),
+              testStatus: data.testStatus || (valid ? "active" : "error"),
+              httpStatus: data.httpStatus ?? null,
+              upstreamCode: data.upstreamCode || null,
+              category: data.category || null,
+              recommendedAction: data.recommendedAction || null,
             },
           }));
         } catch (error) {
@@ -624,6 +637,7 @@ export default function ProviderDetailPage() {
           completed: index + 1,
           passed,
           failed,
+          actionRequired,
           stopped: false,
         });
 
@@ -1666,8 +1680,13 @@ export default function ProviderDetailPage() {
                   <div className="flex flex-wrap items-center gap-3">
                     <span>Total: {oneByOneSummary.total}</span>
                     <span>Completed: {oneByOneSummary.completed}</span>
-                    <span>Passed: {oneByOneSummary.passed}</span>
-                    <span>Failed: {oneByOneSummary.failed}</span>
+                    <span className="text-green-600 dark:text-green-400">Passed: {oneByOneSummary.passed}</span>
+                    <span className="text-red-600 dark:text-red-400">Failed: {oneByOneSummary.failed}</span>
+                    {(oneByOneSummary.actionRequired || 0) > 0 && (
+                      <span className="font-medium text-amber-600 dark:text-amber-400">
+                        Action required: {oneByOneSummary.actionRequired}
+                      </span>
+                    )}
                     {oneByOneSummary.stopped && (
                       <span className="text-amber-600 dark:text-amber-400">Stopped</span>
                     )}

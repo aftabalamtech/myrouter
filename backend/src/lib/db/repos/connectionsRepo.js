@@ -8,6 +8,7 @@ const OPTIONAL_FIELDS = [
   "accessToken", "refreshToken", "expiresAt", "tokenType",
   "scope", "projectId", "apiKey", "testStatus",
   "lastTested", "lastError", "lastErrorAt", "rateLimitedUntil", "expiresIn", "errorCode",
+  "lastErrorCategory", "lastErrorHttpStatus", "lastErrorUpstreamCode",
   "consecutiveUseCount",
   "cached_jwt", "jwt_expires_at", "last_balance", "fail_count", "cooling_until", "cookie",
 ];

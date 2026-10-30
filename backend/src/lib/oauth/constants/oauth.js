@@ -92,10 +92,18 @@ export const IFLOW_CONFIG = {
   },
 };
 
-// Antigravity OAuth Configuration (Standard OAuth2 with Google)
+// Antigravity OAuth Configuration (Standard OAuth2 with Google).
+// The built-in client is the Antigravity IDE client and only accepts the
+// fixed loopback callback. Deployments that need a public callback MUST use
+// their own Google OAuth client (settings UI / OAuth modal advanced fields).
+// Environment variables provide the same override for CLI/self-hosted use.
 export const ANTIGRAVITY_CONFIG = {
-  clientId: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
-  clientSecret: "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",
+  // Built-in Antigravity IDE client: loopback-only fallback for local
+  // dashboards (Google only allows http://localhost:51121/oauth-callback).
+  // Public/headless deployments MUST configure their own client via settings
+  // or the ANTIGRAVITY_OAUTH_CLIENT_ID/SECRET environment variables.
+  clientId: process.env.ANTIGRAVITY_OAUTH_CLIENT_ID || "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
+  clientSecret: process.env.ANTIGRAVITY_OAUTH_CLIENT_SECRET || "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",
   authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
   tokenUrl: "https://oauth2.googleapis.com/token",
   userInfoUrl: "https://www.googleapis.com/oauth2/v1/userinfo",

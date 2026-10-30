@@ -15,6 +15,15 @@ export async function POST_handler(req, res, { params }) {
       valid: result.valid,
       error: result.error,
       refreshed: result.refreshed || false,
+      // Sanitized diagnostics (task §4): no tokens, cookies, API keys or
+      // authorization headers — category/HTTP status/upstream code only.
+      testStatus: result.testStatus || (result.valid ? "active" : "error"),
+      category: result.category || null,
+      httpStatus: result.httpStatus ?? null,
+      upstreamCode: result.upstreamCode || null,
+      detail: result.detail || null,
+      providerBlocked: result.providerBlocked === true,
+      recommendedAction: result.recommendedAction || null,
     });
   } catch (error) {
     console.log("Error testing connection:", error);

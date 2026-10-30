@@ -109,14 +109,35 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
   const getStatusVariant = () => {
     if (connection.isActive === false) return "default";
     if (effectiveStatus === "active" || effectiveStatus === "success") return "success";
+    // action_required = account-level restriction (e.g. Google
+    // VALIDATION_REQUIRED). Explicitly NOT success — red badge with an
+    // explanatory row, manual retry via Re-test after fixing the account.
+    if (effectiveStatus === "action_required") return "error";
     if (effectiveStatus === "error" || effectiveStatus === "expired" || effectiveStatus === "unavailable") return "error";
     return "default";
   };
+
+  const getStatusLabel = () => {
+    const status = connection.isActive === false ? "disabled" : (effectiveStatus || "Unknown");
+    return status === "action_required" ? "action required" : status;
+  };
+
+  // Sanitized upstream diagnostics persisted by the connection test.
+  // Never contains tokens/cookies/API keys (backend sanitizes before storing).
+  const diagBits = [
+    connection.lastErrorHttpStatus ? `HTTP ${connection.lastErrorHttpStatus}` : null,
+    connection.lastErrorUpstreamCode ? `code ${connection.lastErrorUpstreamCode}` : null,
+    connection.lastErrorCategory ? `category: ${connection.lastErrorCategory}` : null,
+  ].filter(Boolean);
+  const isAccountLevel =
+    effectiveStatus === "action_required" || connection.lastErrorCategory === "validation_required";
 
   const getOneByOneVariant = () => {
     if (!oneByOneStatus) return "default";
     if (oneByOneStatus.state === "success") return "success";
     if (oneByOneStatus.state === "failed") return "error";
+    // never success — same non-success rule as the connection badge
+    if (oneByOneStatus.state === "action_required") return "error";
     if (oneByOneStatus.state === "testing") return "primary";
     return "default";
   };
@@ -126,6 +147,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
     if (oneByOneStatus.state === "queued") return "queued";
     if (oneByOneStatus.state === "testing") return "testing";
     if (oneByOneStatus.state === "success") return "success";
+    if (oneByOneStatus.state === "action_required") return "action required";
     if (oneByOneStatus.state === "failed") return oneByOneStatus.error ? `failed: ${oneByOneStatus.error}` : "failed";
     return null;
   };
@@ -166,7 +188,7 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
           <p className="text-sm font-medium truncate">{displayName}</p>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
             <Badge variant={getStatusVariant()} size="sm" dot>
-              {connection.isActive === false ? "disabled" : (effectiveStatus || "Unknown")}
+              {getStatusLabel()}
             </Badge>
             <Badge variant="default" size="sm">
               {authLabel}
@@ -178,9 +200,29 @@ export default function ConnectionRow({ connection, proxyPools, isOAuth, isFirst
             )}
             {isCooldown && connection.isActive !== false && <CooldownTimer until={modelLockUntil} />}
             {connection.lastError && connection.isActive !== false && (
-              <span className="max-w-full truncate text-xs text-red-500 sm:max-w-[300px]" title={connection.lastError}>
+              <span
+                className={`max-w-full truncate text-xs sm:max-w-[300px] ${isAccountLevel ? "text-amber-600 dark:text-amber-400" : "text-red-500"}`}
+                title={connection.lastError}
+              >
                 {connection.lastError}
               </span>
+            )}
+            {(isAccountLevel || diagBits.length > 0) && (
+              <div className="flex w-full flex-col gap-0.5">
+                {diagBits.length > 0 && (
+                  <span className="text-[11px] text-text-muted">
+                    {diagBits.join(" · ")}
+                    {!isAccountLevel && " · scope: this connection"}
+                  </span>
+                )}
+                {isAccountLevel && (
+                  <span className="text-[11px] text-amber-600 dark:text-amber-400">
+                    Account-level restriction — affects the whole connection, not individual models.
+                    {" "}
+                    Verify the account with the provider, then run Re-test to retry.
+                  </span>
+                )}
+              </div>
             )}
             <span className="text-xs text-text-muted">#{connection.priority}</span>
             {connection.globalPriority && (
@@ -277,6 +319,9 @@ ConnectionRow.propTypes = {
     testStatus: PropTypes.string,
     isActive: PropTypes.bool,
     lastError: PropTypes.string,
+    lastErrorCategory: PropTypes.string,
+    lastErrorHttpStatus: PropTypes.number,
+    lastErrorUpstreamCode: PropTypes.string,
     priority: PropTypes.number,
     globalPriority: PropTypes.number,
   }).isRequired,
@@ -299,6 +344,7 @@ ConnectionRow.propTypes = {
   oneByOneStatus: PropTypes.shape({
     state: PropTypes.string,
     error: PropTypes.string,
+    testStatus: PropTypes.string,
   }),
   isSelected: PropTypes.bool,
   onSelect: PropTypes.func,

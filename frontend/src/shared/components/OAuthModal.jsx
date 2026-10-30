@@ -14,6 +14,17 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   const [authData, setAuthData] = useState(null);
   const [callbackUrl, setCallbackUrl] = useState("");
   const [error, setError] = useState(null);
+  // §3 Antigravity: user-configured Google OAuth credentials (headless
+  // deployments register their own client). Secrets are write-only: persisted
+  // via PATCH /api/settings and never sent in a URL or echoed back by the API.
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [googleClientSecret, setGoogleClientSecret] = useState("");
+  const [googleRedirectUri, setGoogleRedirectUri] = useState("");
+  const [hasGoogleSecret, setHasGoogleSecret] = useState(false);
+  const [antigravityConfigReady, setAntigravityConfigReady] = useState(false);
+  const antigravityLoadedRef = useRef(false);
+  const [googleConfigError, setGoogleConfigError] = useState(null);
   const [isDeviceCode, setIsDeviceCode] = useState(false);
   const [deviceData, setDeviceData] = useState(null);
   const [polling, setPolling] = useState(false);
@@ -31,11 +42,56 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   useEffect(() => {
     if (typeof window !== "undefined") {
       setIsLocalhost(
-        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
+        window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1" ||
+        window.location.hostname === "[::1]" ||
+        window.location.hostname === "::1"
       );
       setPlaceholderUrl(`${window.location.origin}/callback?code=...`);
     }
   }, []);
+
+  const defaultAntigravityRedirect = isLocalhost
+    ? "http://localhost:51121/oauth-callback"
+    : (typeof window !== "undefined" ? `${window.location.origin}/callback` : "");
+  const effectiveAntigravityRedirect = googleRedirectUri.trim() || defaultAntigravityRedirect;
+  const isLoopbackAntigravityRedirect = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(effectiveAntigravityRedirect);
+
+  // Load saved Antigravity Google OAuth configuration. The secret is
+  // write-only: the API only returns `antigravityOAuthConfigured`.
+  useEffect(() => {
+    if (!isOpen || provider !== "antigravity") {
+      antigravityLoadedRef.current = true;
+      setAntigravityConfigReady(true);
+      return;
+    }
+    let cancelled = false;
+    antigravityLoadedRef.current = false;
+    setAntigravityConfigReady(false);
+    (async () => {
+      try {
+        const res = await fetch("/api/settings", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Could not load settings");
+        if (cancelled) return;
+        setGoogleClientId(data.antigravityOAuthClientId || "");
+        setGoogleRedirectUri(data.antigravityOAuthRedirectUri || "");
+        setHasGoogleSecret(!!data.antigravityOAuthConfigured);
+        if (data.antigravityOAuthClientId && !data.antigravityOAuthConfigured) {
+          setGoogleConfigError("A Client ID is saved without a Client Secret. Add the secret or clear both fields.");
+          setShowAdvanced(true);
+        }
+      } catch (err) {
+        if (!cancelled) setGoogleConfigError(err.message);
+      } finally {
+        if (!cancelled) {
+          antigravityLoadedRef.current = true;
+          setAntigravityConfigReady(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen, provider]);
 
   // Registry manifest: provider notice + docs link (no secrets — public metadata)
   useEffect(() => {
@@ -236,7 +292,38 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       } else if (provider === "xai") {
         redirectUri = "http://127.0.0.1:56121/callback";
       } else if (provider === "antigravity") {
-        redirectUri = "http://localhost:51121/oauth-callback";
+        // Local dashboards use the fixed loopback callback the built-in
+        // client accepts. Public/headless dashboards use their own origin
+        // (/callback), which MUST be registered on the user's Google OAuth
+        // client. An explicit configured URI always wins.
+        redirectUri = googleRedirectUri.trim() || defaultAntigravityRedirect;
+        const typedSecret = googleClientSecret.trim();
+        const customClientConfigured = !!googleClientId.trim() && (!!typedSecret || hasGoogleSecret);
+        if (!isLoopbackAntigravityRedirect && !customClientConfigured) {
+          setShowAdvanced(true);
+          throw new Error(
+            `This dashboard is served from a public origin, so Antigravity needs your own Google OAuth client. ` +
+            `Register exactly "${redirectUri}" as an Authorized redirect URI in Google Cloud Console, ` +
+            `then enter the Client ID and Client Secret under Advanced Google OAuth configuration.`
+          );
+        }
+        // Persist the credentials server-side BEFORE authorize: the secret
+        // must never travel in a URL/query string or browser history.
+        const patch = { antigravityOAuthRedirectUri: googleRedirectUri.trim() };
+        if (googleClientId.trim()) patch.antigravityOAuthClientId = googleClientId.trim();
+        if (typedSecret) patch.antigravityOAuthClientSecret = typedSecret;
+        const saveRes = await fetch("/api/settings", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        const saveData = await saveRes.json().catch(() => ({}));
+        if (!saveRes.ok) throw new Error(saveData.error || "Could not save Google OAuth configuration");
+        if (typedSecret) {
+          setHasGoogleSecret(true);
+          setGoogleClientSecret("");
+        }
+        setGoogleConfigError(null);
       } else {
         redirectUri = `http://localhost:${appPort}/callback`;
       }
@@ -293,10 +380,11 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         }
       }
 
-      // Antigravity: same fixed-port proxy pattern on 51121
+      // Antigravity: the fixed-port proxy only works for loopback callbacks.
+      // Public HTTPS callbacks are handled by the dashboard /callback page.
       let antigravityProxyActive = false;
       let antigravityServerSide = false;
-      if (provider === "antigravity") {
+      if (provider === "antigravity" && isLoopbackAntigravityRedirect) {
         try {
           const proxyUrl = new URL(`/api/oauth/antigravity/start-proxy`, window.location.origin);
           proxyUrl.searchParams.set("app_port", appPort);
@@ -352,7 +440,14 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       setError(err.message);
       setStep("error");
     }
-  }, [provider, isLocalhost, startPolling, oauthMeta, idcConfig]);
+  }, [provider, isLocalhost, startPolling, oauthMeta, idcConfig, googleClientId, googleClientSecret, googleRedirectUri, hasGoogleSecret, defaultAntigravityRedirect, isLoopbackAntigravityRedirect]);
+
+  // Keep the latest flow function without making the open-effect re-run every
+  // time an advanced field changes (which would restart the OAuth popup).
+  const startOAuthFlowRef = useRef(startOAuthFlow);
+  useEffect(() => {
+    startOAuthFlowRef.current = startOAuthFlow;
+  }, [startOAuthFlow]);
 
   // Reset state and start OAuth when modal opens
   useEffect(() => {
@@ -364,7 +459,12 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       setDeviceData(null);
       setPolling(false);
       pollingAbortRef.current = false;
-      startOAuthFlow();
+      // Antigravity must load saved credentials/redirect URI first so a
+      // public deployment never starts a loopback-only flow by accident.
+      // Use the ref (not only state) so reopening the modal cannot race a
+      // stale "ready" value from the previous open.
+      if (provider === "antigravity" && !antigravityLoadedRef.current) return;
+      startOAuthFlowRef.current();
     } else if (!isOpen) {
       // Abort polling and cleanup proxy when modal closes
       pollingAbortRef.current = true;
@@ -376,7 +476,7 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         fetch("/api/oauth/antigravity/stop-proxy").catch(() => {});
       }
     }
-  }, [isOpen, provider, startOAuthFlow]);
+  }, [isOpen, provider, antigravityConfigReady]);
 
   // Fixed-port server-side mode: poll status (proxy auto-exchanges + saves DB)
   useEffect(() => {
@@ -527,6 +627,30 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         return;
       }
 
+      const url0 = new URL(input.startsWith("http") ? input : `http://placeholder.local/${input.replace(/^\?/, "")}`);
+      const code0 = url0.searchParams.get("code");
+      const state0 = url0.searchParams.get("state");
+
+      // §4 Antigravity: complete the ORIGINAL authorization session server-side
+      // (session owns state + exact redirect URI, rejects reuse/expiry) instead
+      // of a stateless client-side exchange. This fixes manual callbacks, not
+      // Google's redirect_uri_mismatch — the Google client must still have the
+      // redirect URI registered.
+      if (provider === "antigravity" && code0 && state0) {
+        const res = await fetch("/api/oauth/antigravity/manual-code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // The server session already owns the exact redirect URI, PKCE
+          // verifier and OAuth client captured at authorize time.
+          body: JSON.stringify({ code: code0, state: state0 }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        setStep("success");
+        onSuccess?.();
+        return;
+      }
+
       const url = new URL(input);
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
@@ -546,6 +670,29 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       setStep("error");
     }
   };
+
+  const clearAntigravityCredentials = useCallback(async () => {
+    setGoogleConfigError(null);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          antigravityOAuthClientId: "",
+          antigravityOAuthClientSecret: "",
+          antigravityOAuthRedirectUri: "",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not clear Google OAuth configuration");
+      setGoogleClientId("");
+      setGoogleClientSecret("");
+      setGoogleRedirectUri("");
+      setHasGoogleSecret(false);
+    } catch (err) {
+      setGoogleConfigError(err.message);
+    }
+  }, []);
 
   // Clear session on modal close + cleanup proxy
   const handleClose = useCallback(() => {
@@ -567,8 +714,102 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   const manualPlaceholder = isXaiProvider
     ? "http://127.0.0.1:56121/callback?code=... or copied code"
     : isAntigravityProvider
-    ? "http://localhost:51121/oauth-callback?code=..."
+    ? `${effectiveAntigravityRedirect || "http://localhost:51121/oauth-callback"}?code=...`
     : placeholderUrl;
+
+  const antigravityRedirectPanel = isAntigravityProvider ? (
+    <div className="rounded-lg border border-border bg-sidebar/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-text-muted">
+          Exact redirect URI (register this in Google Cloud Console):
+        </p>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={copied === "ag_redirect" ? "check" : "content_copy"}
+          onClick={() => copy(effectiveAntigravityRedirect, "ag_redirect")}
+          disabled={!effectiveAntigravityRedirect}
+        />
+      </div>
+      <code className="mt-1 block break-all text-xs text-text-main">{effectiveAntigravityRedirect || "(not set)"}</code>
+    </div>
+  ) : null;
+
+  const antigravityAdvancedPanel = isAntigravityProvider ? (
+    <div className="rounded-lg border border-border">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium"
+        onClick={() => setShowAdvanced((value) => !value)}
+      >
+        <span className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-base text-text-muted">key</span>
+          Advanced Google OAuth configuration
+        </span>
+        <span className="material-symbols-outlined text-base text-text-muted">
+          {showAdvanced ? "expand_less" : "expand_more"}
+        </span>
+      </button>
+      {showAdvanced && (
+        <div className="space-y-3 border-t border-border p-3">
+          <p className="text-xs text-text-muted">
+            Public/headless deployments (Render, Docker, Cloud Workstations, tunnels) must use their own
+            Google OAuth client. Create an OAuth client ID (Web application) in Google Cloud Console,
+            add the exact redirect URI above to <strong>Authorized redirect URIs</strong>, then paste the
+            Client ID and Client Secret here. Local dashboards can leave these blank to use the
+            loopback-only built-in client.
+          </p>
+          <Input
+            label="Google OAuth Client ID"
+            value={googleClientId}
+            onChange={(e) => setGoogleClientId(e.target.value)}
+            placeholder="1234567890-xxxx.apps.googleusercontent.com"
+            autoComplete="off"
+            inputClassName="font-mono text-xs"
+          />
+          <Input
+            label="Google OAuth Client Secret"
+            type="password"
+            value={googleClientSecret}
+            onChange={(e) => setGoogleClientSecret(e.target.value)}
+            placeholder={hasGoogleSecret ? "Saved — leave blank to keep" : "GOCSPX-..."}
+            hint={hasGoogleSecret ? "A secret is saved. Enter a new value only to replace it." : "Stored server-side; never sent in a URL."}
+            autoComplete="new-password"
+            inputClassName="font-mono text-xs"
+          />
+          <Input
+            label="Redirect URI"
+            value={googleRedirectUri}
+            onChange={(e) => setGoogleRedirectUri(e.target.value)}
+            placeholder={defaultAntigravityRedirect}
+            hint={`Leave blank to use ${defaultAntigravityRedirect || "the dashboard default"}.`}
+            inputClassName="font-mono text-xs"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={startOAuthFlow} disabled={!antigravityConfigReady}>
+              Save & Retry
+            </Button>
+            {(hasGoogleSecret || googleClientId) && (
+              <Button size="sm" variant="ghost" onClick={clearAntigravityCredentials}>
+                Clear saved credentials
+              </Button>
+            )}
+            <a
+              href="https://console.cloud.google.com/apis/credentials"
+              target="_blank"
+              rel="noreferrer"
+              className="self-center text-xs text-primary hover:underline"
+            >
+              Open Google Cloud Console
+            </a>
+          </div>
+          {googleConfigError && (
+            <p className="text-xs text-red-500">{googleConfigError}</p>
+          )}
+        </div>
+      )}
+    </div>
+  ) : null;
 
   return (
     <Modal isOpen={isOpen} title={modalTitle} onClose={handleClose} size="lg">
@@ -583,6 +824,18 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
           <a href={manifest.docsUrl} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline w-fit">
             Provider documentation
           </a>
+        )}
+        {isAntigravityProvider && (step === "waiting" || step === "input") && (
+          <>
+            {antigravityRedirectPanel}
+            {antigravityAdvancedPanel}
+          </>
+        )}
+        {isAntigravityProvider && step === "error" && (
+          <>
+            {antigravityRedirectPanel}
+            {antigravityAdvancedPanel}
+          </>
         )}
         {/* Waiting + Manual Input combined (non-device-code) */}
         {(step === "waiting" || step === "input") && !isDeviceCode && (
