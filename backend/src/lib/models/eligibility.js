@@ -4,7 +4,7 @@ import { getCustomModels, getModelAliases } from "../db/index.js";
 import { getModelTestResults } from "./modelTestRepo.js";
 import { getProviderConnections } from "../localDb.js";
 import { getSyncedModels } from "./modelSync.js";
-import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "../../../open-sse/config/providerModels.js";
+import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
 import { AI_PROVIDERS, FREE_PROVIDERS, getProviderAlias } from "../../shared/constants/providers.js";
 
 /**

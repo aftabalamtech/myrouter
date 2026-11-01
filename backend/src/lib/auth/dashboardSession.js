@@ -2,7 +2,7 @@ import { SignJWT, jwtVerify } from "jose";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { DATA_DIR } from "../../lib/dataDir.js";
+import { DATA_DIR } from "../dataDir.js";
 
 function loadJwtSecret() {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;

@@ -1,6 +1,6 @@
 
 import { getComboById, updateCombo, deleteCombo, getComboByName } from "../../../lib/localDb.js";
-import { resetComboRotation } from "../../../../open-sse/services/combo.js";
+import { resetComboRotation } from "open-sse/services/combo.js";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;

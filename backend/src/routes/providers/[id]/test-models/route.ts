@@ -1,14 +1,13 @@
 
 import { getProviderConnectionById } from "../../../../lib/localDb.js";
-import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "../../../../../open-sse/config/providerModels.js";
+import { getProviderModels, PROVIDER_ID_TO_ALIAS } from "open-sse/config/providerModels.js";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "../../../../shared/constants/providers.js";
 import { UPDATER_CONFIG } from "../../../../shared/constants/config.js";
 import { pingModelByKind } from "../../../models/test/ping.js";
-import { isConnectionProviderBlocked, providerBlockedMessage } from "../../../../lib/models/connectionHealth.js";
 
 /**
  * POST /api/providers/[id]/test-models
- * id = connectionId — used only to resolve provider + model list.
+ * id = connectionId — pins every model request to this connection.
  * Actual requests go through the internal endpoint that matches each model kind.
  */
 export async function POST_handler(req, res, { params }) {
@@ -42,42 +41,17 @@ export async function POST_handler(req, res, { params }) {
       return res.status(400).json({ error: "No models configured for this provider" });
     }
 
-    // Provider-level guard (task §2): when the connection already carries an
-    // account-level restriction (e.g. Google VALIDATION_REQUIRED), re-pinging
-    // every model cannot succeed — skip the tests and mark all models with
-    // the shared reason. The manual retry path (fix account → Re-test)
-    // stays available.
-    if (isConnectionProviderBlocked(connection).blocked) {
-      const message = providerBlockedMessage(providerId);
-      const results = models.map((m) => ({
-        modelId: m.id,
-        name: m.name || m.id,
-        ok: false,
-        status: "skipped",
-        skipped: true,
-        latencyMs: null,
-        errorCode: "provider_blocked",
-        errorMessage: message,
-      }));
-      return res.json({
-        provider: providerId,
-        connectionId: id,
-        providerBlocked: true,
-        results,
-      });
-    }
-
     // Warm up with first model to trigger token refresh (if needed) before parallel calls.
     // This prevents race condition where multiple requests concurrently refresh the same token.
     const [first, ...rest] = models;
     const firstKind = first.type || "llm";
-    const firstResult = await pingModelByKind(`${alias}/${first.id}`, firstKind, baseUrl);
+    const firstResult = await pingModelByKind(`${alias}/${first.id}`, firstKind, baseUrl, 15000, { connectionId: id });
     const results = [{ modelId: first.id, name: first.name || first.id, ...firstResult }];
 
     if (rest.length > 0) {
       const restResults = await Promise.all(
         rest.map(async (model) => {
-          const result = await pingModelByKind(`${alias}/${model.id}`, model.type || "llm", baseUrl);
+          const result = await pingModelByKind(`${alias}/${model.id}`, model.type || "llm", baseUrl, 15000, { connectionId: id });
           return { modelId: model.id, name: model.name || model.id, ...result };
         })
       );

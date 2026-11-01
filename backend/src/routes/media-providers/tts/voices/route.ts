@@ -1,4 +1,4 @@
-import { VOICE_FETCHERS } from "../../../../../open-sse/handlers/ttsCore.js";
+import { VOICE_FETCHERS } from "open-sse/handlers/ttsCore.js";
 
 
 // Map locale code → country name

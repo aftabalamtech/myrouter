@@ -1,7 +1,7 @@
 
 import { getSettings, updateSettings } from "../../lib/localDb.js";
 import { applyOutboundProxyEnv } from "../../lib/network/outboundProxy.js";
-import { resetComboRotation } from "../../../open-sse/services/combo.js";
+import { resetComboRotation } from "open-sse/services/combo.js";
 import { redactSettingsForClient } from "../../lib/auth/publicSettings.js";
 import { parseRedirectUri, validateGoogleOAuthClient } from "../../lib/oauth/redirectUri.js";
 import bcrypt from "bcryptjs";

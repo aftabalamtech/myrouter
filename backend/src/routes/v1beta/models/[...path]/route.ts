@@ -1,5 +1,5 @@
 import { handleChat } from "../../../../sse/handlers/chat.js";
-import { initTranslators } from "../../../../../open-sse/translator/index.js";
+import { initTranslators } from "open-sse/translator/index.js";
 
 let initialized = false;
 

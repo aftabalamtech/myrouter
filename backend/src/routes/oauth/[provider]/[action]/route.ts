@@ -103,12 +103,18 @@ export async function GET_handler(req, res, { params }) {
           });
         }
         const settings = await getSettings();
-        // Prefer credentials explicitly supplied by the caller; otherwise use
-        // the saved settings. Both are validated together: a half-configured
-        // custom client is an error, never a silent fallback to another app.
+        // Prefer credentials explicitly supplied by the caller. A partial
+        // saved client is treated as stale optional configuration so the
+        // built-in v4 client remains usable; partial credentials supplied for
+        // this request are still rejected.
+        const explicitClientId = String(meta.antigravityClientId || "").trim();
+        const explicitClientSecret = String(meta.antigravityClientSecret || "").trim();
+        const savedClientId = String(settings.antigravityOAuthClientId || "").trim();
+        const savedClientSecret = String(settings.antigravityOAuthClientSecret || "").trim();
+        const useSavedClient = !!savedClientId && !!savedClientSecret;
         const checked = validateGoogleOAuthClient({
-          clientId: meta.antigravityClientId || settings.antigravityOAuthClientId,
-          clientSecret: meta.antigravityClientSecret || settings.antigravityOAuthClientSecret,
+          clientId: explicitClientId || (useSavedClient ? savedClientId : ""),
+          clientSecret: explicitClientSecret || (useSavedClient ? savedClientSecret : ""),
         });
         if (!checked.ok) {
           return res.status(400).json({
@@ -291,7 +297,7 @@ export async function POST_handler(req, res, { params }) {
 
       // Detect if "code" is actually a raw JWT access token (starts with eyJ)
       if (code && code.startsWith("eyJ") && code.includes(".")) {
-        const { extractCodexAccountInfo } = await import("../../../../lib/oauth/providers");
+        const { extractCodexAccountInfo } = await import("../../../../lib/oauth/providers.js");
         const info = extractCodexAccountInfo(code);
 
         // Also decode JWT directly for ChatGPT website tokens which use

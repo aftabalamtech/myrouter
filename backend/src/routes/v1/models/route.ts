@@ -7,8 +7,8 @@ import {
 } from "../../../shared/constants/providers.js";
 import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "../../../lib/localDb.js";
 import { getDisabledModels } from "../../../lib/disabledModelsDb.js";
-import { resolveKiroModels } from "../../../../open-sse/services/kiroModels.js";
-import { resolveQoderModels } from "../../../../open-sse/services/qoderModels.js";
+import { resolveKiroModels } from "open-sse/services/kiroModels.js";
+import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { fetchWithTimeout } from "../../../lib/net/fetchWithTimeout.js";
 import { normalizeCompatibleBaseUrl } from "../../../lib/net/compatibleUrl.js";
 import { readResponseOnce } from "../../../lib/net/httpBody.js";

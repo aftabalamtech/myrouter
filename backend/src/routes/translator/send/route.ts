@@ -1,5 +1,5 @@
 import { getProviderConnections, updateProviderConnection } from "../../../lib/localDb.js";
-import { getExecutor } from "../../../../open-sse/index.js";
+import { getExecutor } from "open-sse";
 
 async function persistRefreshedCredentials(connection, newCredentials) {
   const updateData = {};

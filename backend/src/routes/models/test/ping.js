@@ -37,7 +37,7 @@ function createSilentWavFile() {
   return new Blob([buffer], { type: "audio/wav" });
 }
 
-async function getInternalHeaders() {
+async function getInternalHeaders(connectionId = null) {
   let apiKey = null;
   try {
     const keys = await getApiKeys();
@@ -46,12 +46,13 @@ async function getInternalHeaders() {
 
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+  if (connectionId) headers["x-connection-id"] = connectionId;
   headers["x-9r-cli-token"] = await getConsistentMachineId(CLI_TOKEN_SALT);
   return headers;
 }
 
-export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || 3001}`, timeoutMs = 15000) {
-  const headers = await getInternalHeaders();
+export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || 3001}`, timeoutMs = 15000, options = {}) {
+  const headers = await getInternalHeaders(options.connectionId || null);
   const start = Date.now();
   const timeout = Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : 15000;
 

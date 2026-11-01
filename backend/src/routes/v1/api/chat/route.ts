@@ -1,6 +1,6 @@
 import { handleChat } from "../../../../sse/handlers/chat.js";
-import { initTranslators } from "../../../../../open-sse/translator/index.js";
-import { transformToOllama } from "../../../../../open-sse/utils/ollamaTransform.js";
+import { initTranslators } from "open-sse/translator/index.js";
+import { transformToOllama } from "open-sse/utils/ollamaTransform.js";
 
 let initialized = false;
 

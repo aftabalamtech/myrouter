@@ -2,8 +2,8 @@
 import "open-sse/index.js";
 
 import { getProviderConnectionById, updateProviderConnection } from "../../../lib/localDb.js";
-import { getUsageForProvider } from "../../../../open-sse/services/usage.js"; // Watcher trigger comment
-import { getExecutor } from "../../../../open-sse/executors/index.js";
+import { getUsageForProvider } from "open-sse/services/usage.js"; // Watcher trigger comment
+import { getExecutor } from "open-sse/executors/index.js";
 import { resolveConnectionProxyConfig } from "../../../lib/network/connectionProxy.js";
 import { USAGE_APIKEY_PROVIDERS } from "../../../shared/constants/providers.js";
 

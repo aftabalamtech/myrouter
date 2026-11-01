@@ -11,29 +11,40 @@
 // takes its fetch and refresh implementations as parameters, so the whole
 // decision path is unit-testable with node --test.
 import { decideConnectionTestOutcome } from "../../../../lib/models/connectionHealth.js";
+import { ANTIGRAVITY_HEADERS, INTERNAL_REQUEST_HEADER } from "open-sse/config/appConstants.js";
 
-// Minimal probe that cannot satisfy the request schema → upstream replies 400
-// AFTER authentication/access control passes (probeMode treats 400 as ok).
-// A 403 VALIDATION_REQUIRED / PERMISSION_DENIED still surfaces the gate.
 const PROBE_URL = "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
-const PROBE_BODY = JSON.stringify({
-  model: "connection-probe",
-  request: { contents: [{ role: "user", parts: [{ text: "ping" }] }] },
-});
+
+function probeBody(connection) {
+  return JSON.stringify({
+    project: connection?.projectId?.trim() || "connection-probe",
+    model: "gemini-3-flash-agent",
+    userAgent: "antigravity",
+    requestType: "agent",
+    requestId: `connection-probe-${Date.now()}`,
+    request: {
+      contents: [{ role: "user", parts: [{ text: "Reply with OK." }] }],
+      generationConfig: { maxOutputTokens: 1 },
+      sessionId: "connection-probe",
+    },
+  });
+}
 
 function probeHeaders(token) {
   return {
     "Content-Type": "application/json",
     Authorization: `Bearer ${token}`,
-    "User-Agent": "antigravity",
+    "User-Agent": ANTIGRAVITY_HEADERS["User-Agent"],
+    [INTERNAL_REQUEST_HEADER.name]: INTERNAL_REQUEST_HEADER.value,
+    Accept: "text/event-stream",
   };
 }
 
-async function sendProbe(fetchFn, token) {
+async function sendProbe(fetchFn, token, connection) {
   const res = await fetchFn(PROBE_URL, {
     method: "POST",
     headers: probeHeaders(token),
-    body: PROBE_BODY,
+    body: probeBody(connection),
   });
   let body = "";
   try { body = await res.text(); } catch { body = ""; }
@@ -124,7 +135,7 @@ export async function runAntigravityProbe({
 
   let outcome;
   try {
-    const { resStatus, body } = await sendProbe(fetchFn, token);
+    const { resStatus, body } = await sendProbe(fetchFn, token, connection);
     outcome = classifyByStatus(resStatus, body);
   } catch (err) {
     outcome = classifyByStatus(null, `Network error: ${err?.message || String(err)}`);
@@ -135,7 +146,7 @@ export async function runAntigravityProbe({
     const tokens = await refreshFn(connection);
     if (tokens?.accessToken) {
       try {
-        const { resStatus, body } = await sendProbe(fetchFn, tokens.accessToken);
+        const { resStatus, body } = await sendProbe(fetchFn, tokens.accessToken, connection);
         // The retry's own verdict decides health — the refresh success
         // by itself never flips the result (task §1).
         outcome = classifyByStatus(resStatus, body);

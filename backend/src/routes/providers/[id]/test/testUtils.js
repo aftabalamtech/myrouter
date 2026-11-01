@@ -4,6 +4,7 @@ import { testProxyUrl } from "@/lib/network/proxyTest";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
 import { PROVIDER_ENDPOINTS } from "@/shared/constants/config";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
+import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { resolveOllamaLocalHost } from "open-sse/config/providers.js";
 import {
   refreshProviderCredentials,
@@ -315,6 +316,10 @@ async function testOAuthConnection(connection, effectiveProxy = null) {
   // userinfo endpoint. A valid token passes userinfo while every model fails
   // at the inference endpoint with 403 VALIDATION_REQUIRED (task §1).
   if (connection.provider === "antigravity") {
+    if (!connection.projectId && connection.id && accessToken) {
+      const projectId = await getProjectIdForConnection(connection.id, accessToken);
+      if (projectId) connection.projectId = projectId;
+    }
     const probe = await runAntigravityProbe({
       connection,
       accessToken,

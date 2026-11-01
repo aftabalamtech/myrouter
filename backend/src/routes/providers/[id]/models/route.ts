@@ -3,9 +3,9 @@ import { getProviderConnectionById } from "../../../../models/index.js";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "../../../../shared/constants/providers.js";
 import { GEMINI_CONFIG } from "../../../../lib/oauth/constants/oauth.js";
 import { refreshGoogleToken, updateProviderCredentials } from "../../../../sse/services/tokenRefresh.js";
-import { resolveOllamaLocalHost } from "../../../../../open-sse/config/providers.js";
-import { resolveKiroModels } from "../../../../../open-sse/services/kiroModels.js";
-import { resolveQoderModels } from "../../../../../open-sse/services/qoderModels.js";
+import { resolveOllamaLocalHost } from "open-sse/config/providers.js";
+import { resolveKiroModels } from "open-sse/services/kiroModels.js";
+import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { fetchWithTimeout } from "../../../../lib/net/fetchWithTimeout.js";
 import { buildCompatibleModelsUrl } from "../../../../lib/net/compatibleUrl.js";
 import { readResponseOnce, parseErrorPayload } from "../../../../lib/net/httpBody.js";
@@ -296,14 +296,14 @@ const PROVIDER_MODELS_CONFIG = {
   // Custom resolvers (non-OpenAI-shaped APIs / token-refresh flows)
   codebuddy: {
     customResolver: async (connection) => {
-      const { getModelsByProviderId } = await import("../../../../shared/constants/models");
+      const { getModelsByProviderId } = await import("../../../../shared/constants/models.js");
       const models = getModelsByProviderId("codebuddy");
       return { models };
     }
   },
   cb: {
     customResolver: async (connection) => {
-      const { getModelsByProviderId } = await import("../../../../shared/constants/models");
+      const { getModelsByProviderId } = await import("../../../../shared/constants/models.js");
       const models = getModelsByProviderId("cb");
       return { models };
     }

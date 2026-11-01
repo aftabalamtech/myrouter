@@ -51,10 +51,14 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
     }
   }, []);
 
-  const defaultAntigravityRedirect = isLocalhost
-    ? "http://localhost:51121/oauth-callback"
-    : (typeof window !== "undefined" ? `${window.location.origin}/callback` : "");
-  const effectiveAntigravityRedirect = googleRedirectUri.trim() || defaultAntigravityRedirect;
+  // The built-in Antigravity OAuth client is registered for this fixed
+  // loopback callback. The server-side proxy owns the callback exchange, so
+  // public dashboards can use the same flow as the v4 client.
+  const defaultAntigravityRedirect = "http://localhost:51121/oauth-callback";
+  const savedCustomGoogleClient = !!googleClientId.trim() && hasGoogleSecret;
+  const effectiveAntigravityRedirect = savedCustomGoogleClient && googleRedirectUri.trim()
+    ? googleRedirectUri.trim()
+    : defaultAntigravityRedirect;
   const isLoopbackAntigravityRedirect = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(effectiveAntigravityRedirect);
 
   // Load saved Antigravity Google OAuth configuration. The secret is
@@ -77,10 +81,6 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         setGoogleClientId(data.antigravityOAuthClientId || "");
         setGoogleRedirectUri(data.antigravityOAuthRedirectUri || "");
         setHasGoogleSecret(!!data.antigravityOAuthConfigured);
-        if (data.antigravityOAuthClientId && !data.antigravityOAuthConfigured) {
-          setGoogleConfigError("A Client ID is saved without a Client Secret. Add the secret or clear both fields.");
-          setShowAdvanced(true);
-        }
       } catch (err) {
         if (!cancelled) setGoogleConfigError(err.message);
       } finally {
@@ -292,33 +292,37 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
       } else if (provider === "xai") {
         redirectUri = "http://127.0.0.1:56121/callback";
       } else if (provider === "antigravity") {
-        // Local dashboards use the fixed loopback callback the built-in
-        // client accepts. Public/headless dashboards use their own origin
-        // (/callback), which MUST be registered on the user's Google OAuth
-        // client. An explicit configured URI always wins.
-        redirectUri = googleRedirectUri.trim() || defaultAntigravityRedirect;
+        // Match 9Router-v4: use the built-in client's fixed loopback callback
+        // by default. A complete custom client may opt into an explicit
+        // public callback URI, but it is never required for the normal flow.
         const typedSecret = googleClientSecret.trim();
         const customClientConfigured = !!googleClientId.trim() && (!!typedSecret || hasGoogleSecret);
-        if (!isLoopbackAntigravityRedirect && !customClientConfigured) {
+        const configuredRedirect = googleRedirectUri.trim();
+        redirectUri = customClientConfigured && configuredRedirect
+          ? configuredRedirect
+          : defaultAntigravityRedirect;
+        if (!isLoopbackAntigravityRedirect && customClientConfigured && !configuredRedirect) {
           setShowAdvanced(true);
           throw new Error(
-            `This dashboard is served from a public origin, so Antigravity needs your own Google OAuth client. ` +
-            `Register exactly "${redirectUri}" as an Authorized redirect URI in Google Cloud Console, ` +
-            `then enter the Client ID and Client Secret under Advanced Google OAuth configuration.`
+            "A custom Antigravity OAuth client requires an explicit redirect URI."
           );
         }
-        // Persist the credentials server-side BEFORE authorize: the secret
-        // must never travel in a URL/query string or browser history.
-        const patch = { antigravityOAuthRedirectUri: googleRedirectUri.trim() };
-        if (googleClientId.trim()) patch.antigravityOAuthClientId = googleClientId.trim();
+        // Persist optional custom credentials server-side BEFORE authorize;
+        // the secret must never travel in a URL/query string or browser history.
+        const patch = { antigravityOAuthRedirectUri: configuredRedirect };
+        if (customClientConfigured && googleClientId.trim()) {
+          patch.antigravityOAuthClientId = googleClientId.trim();
+        }
         if (typedSecret) patch.antigravityOAuthClientSecret = typedSecret;
-        const saveRes = await fetch("/api/settings", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(patch),
-        });
-        const saveData = await saveRes.json().catch(() => ({}));
-        if (!saveRes.ok) throw new Error(saveData.error || "Could not save Google OAuth configuration");
+        if (customClientConfigured || configuredRedirect) {
+          const saveRes = await fetch("/api/settings", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patch),
+          });
+          const saveData = await saveRes.json().catch(() => ({}));
+          if (!saveRes.ok) throw new Error(saveData.error || "Could not save Google OAuth configuration");
+        }
         if (typedSecret) {
           setHasGoogleSecret(true);
           setGoogleClientSecret("");
@@ -380,8 +384,8 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
         }
       }
 
-      // Antigravity: the fixed-port proxy only works for loopback callbacks.
-      // Public HTTPS callbacks are handled by the dashboard /callback page.
+      // Antigravity: use the same fixed-port proxy as 9Router-v4. It owns the
+      // callback exchange and saves the connection server-side.
       let antigravityProxyActive = false;
       let antigravityServerSide = false;
       if (provider === "antigravity" && isLoopbackAntigravityRedirect) {

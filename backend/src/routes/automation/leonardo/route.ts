@@ -1,6 +1,6 @@
 
 import { makeKv } from "../../../lib/db/helpers/kvStore.js";
-import { getProviderModels } from "../../../../open-sse/config/providerModels.js";
+import { getProviderModels } from "open-sse/config/providerModels.js";
 
 const leoKv = makeKv("leonardo");
 const CONFIG_KEY = "admin_config";

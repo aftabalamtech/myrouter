@@ -1,10 +1,10 @@
 
-import { detectFormat, getTargetFormat } from "../../../../open-sse/services/provider.js";
-import { translateRequest } from "../../../../open-sse/translator/index.js";
-import { FORMATS } from "../../../../open-sse/translator/formats.js";
-import { parseModel } from "../../../../open-sse/services/model.js";
+import { detectFormat, getTargetFormat } from "open-sse/services/provider.js";
+import { translateRequest } from "open-sse/translator/index.js";
+import { FORMATS } from "open-sse/translator/formats.js";
+import { parseModel } from "open-sse/services/model.js";
 import { getProviderConnections } from "../../../lib/localDb.js";
-import { getExecutor } from "../../../../open-sse/executors/index.js";
+import { getExecutor } from "open-sse/executors/index.js";
 
 export async function POST_handler(req, res) {
   try {

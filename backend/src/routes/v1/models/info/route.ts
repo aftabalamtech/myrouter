@@ -1,4 +1,4 @@
-import { PROVIDER_MODELS } from "../../../../../open-sse/config/providerModels.js";
+import { PROVIDER_MODELS } from "open-sse/config/providerModels.js";
 import { AI_PROVIDERS, ALIAS_TO_ID } from "../../../../shared/constants/providers.js";
 
 const KIND_ENDPOINT = {

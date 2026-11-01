@@ -605,7 +605,7 @@ if (!__body.okStatus) {
                   if (pid) {
                     console.log(`[AG OAuth] Background onboard got projectId: ${pid}, updating DB...`);
                     try {
-                      const { updateProviderConnectionByEmail } = await import("../../lib/localDb.js");
+                      const { updateProviderConnectionByEmail } = await import("../localDb.js");
                       await updateProviderConnectionByEmail(savedEmail, "antigravity", { projectId: pid });
                       console.log("[AG OAuth] DB updated with projectId:", pid);
                     } catch (dbErr) {
@@ -743,7 +743,7 @@ if (!__body.okStatus) {
     // locally, the user lands on qoder.com/device/selectAccounts in the
     // browser, and we poll openapi.qoder.sh until a `dt-...` token appears.
     requestDeviceCode: async (config) => {
-      const { QoderService } = await import("../../lib/oauth/services/qoder");
+      const { QoderService } = await import("./services/qoder.js");
       const flow = new QoderService().initiateDeviceFlow();
       // Match the device_code shape the rest of the OAuthModal expects
       // (device_code, user_code, verification_uri[_complete], interval).
@@ -764,7 +764,7 @@ if (!__body.okStatus) {
       };
     },
     pollToken: async (config, deviceCode, codeVerifier, extraData) => {
-      const { QoderService } = await import("../../lib/oauth/services/qoder");
+      const { QoderService } = await import("./services/qoder.js");
       const svc = new QoderService();
       const nonce = deviceCode || extraData?._qoderNonce;
       const verifier = codeVerifier || extraData?._qoderVerifier;
@@ -1599,7 +1599,7 @@ export async function backfillCodexEmails() {
   if (codexBackfillDone) return;
   codexBackfillDone = true;
   try {
-    const { getProviderConnections, updateProviderConnection } = await import("../../lib/localDb");
+    const { getProviderConnections, updateProviderConnection } = await import("../localDb.js");
     const connections = await getProviderConnections();
     const targets = connections.filter((c) => {
       if (c.provider !== "codex" || c.authType !== "oauth" || !c.idToken) return false;

@@ -1,6 +1,6 @@
 
 import { getProviderConnections } from "../../../../../lib/localDb.js";
-import { fetchElevenLabsVoices } from "../../../../../../open-sse/handlers/ttsCore.js";
+import { fetchElevenLabsVoices } from "open-sse/handlers/ttsCore.js";
 
 const langNames = new Intl.DisplayNames(["en"], { type: "language" });
 

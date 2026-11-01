@@ -1,5 +1,5 @@
 import { handleChat } from "../../../../sse/handlers/chat.js";
-import { initTranslators } from "../../../../../open-sse/translator/index.js";
+import { initTranslators } from "open-sse/translator/index.js";
 
 // Force compile reload for Kimi Coding header change
 let initialized = false;
